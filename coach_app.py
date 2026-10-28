@@ -1217,6 +1217,11 @@ class App(ctk.CTk):
             except Exception:  # noqa: BLE001
                 pass
         self.destroy()
+        # Garante que o processo termina na hora (threads de download, voz e
+        # bandeja não seguram o app aberto; o atualizador depende disso).
+        import logging
+        logging.shutdown()
+        os._exit(0)
 
 
 class SeletorCampeao(ctk.CTkToplevel):

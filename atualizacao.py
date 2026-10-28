@@ -70,6 +70,10 @@ def instalar(instalador: Path):
     # Por isso o instalador roda com o ambiente limpo.
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith(("_PYI", "_MEI"))}
     env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-    flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    subprocess.Popen([str(instalador), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
-                     close_fds=True, env=env, creationflags=flags)
+    # O instalador só começa depois de ~4 s, quando o app já fechou (o app sai logo
+    # em seguida). Sem essa espera, ele encontra o Quíron aberto e para com o
+    # erro "não foi possível fechar os aplicativos".
+    flags = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+    comando = (f'cmd /c ping -n 5 127.0.0.1 >nul & '
+               f'"{instalador}" /SILENT /SUPPRESSMSGBOXES /NORESTART')
+    subprocess.Popen(comando, close_fds=True, env=env, creationflags=flags)

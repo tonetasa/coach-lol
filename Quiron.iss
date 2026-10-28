@@ -27,7 +27,9 @@ SetupIconFile=icone.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-CloseApplications=yes
+; fecha o Quíron se ainda estiver aberto (inclusive minimizado na bandeja)
+CloseApplications=force
+CloseApplicationsFilter=*.exe
 VersionInfoVersion={#AppVersion}
 VersionInfoDescription=Instalador do {#AppName}
 VersionInfoCompany={#AppPublisher}
