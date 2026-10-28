@@ -1514,6 +1514,75 @@ class EditorPerfil(ctk.CTkToplevel):
         self.destroy()
 
 
+class SeletorItem(ctk.CTkToplevel):
+    """Grade com os ícones dos itens da loja, busca e filtro por tipo."""
+
+    COLUNAS = 7
+    FILTROS = {
+        "Todos": None,
+        "Mágico": {"SpellDamage"},
+        "Físico": {"Damage", "CriticalStrike", "AttackSpeed", "ArmorPenetration"},
+        "Defesa": {"Armor", "SpellBlock", "Health"},
+        "Botas": {"Boots"},
+        "Suporte": {"ManaRegen", "HealthRegen", "Aura"},
+    }
+
+    def __init__(self, pai, app: App, ao_escolher):
+        super().__init__(pai, fg_color=FUNDO)
+        self.app, self.ao_escolher = app, ao_escolher
+        self.title("Escolher item")
+        self.geometry("660x640")
+        self.transient(pai)
+        self.after(100, self.grab_set)
+        topo = ctk.CTkFrame(self, fg_color="transparent")
+        topo.pack(fill="x", padx=16, pady=(16, 8))
+        self.busca = ctk.CTkEntry(topo, placeholder_text="Buscar item...", height=36,
+                                  border_color=BORDA)
+        self.busca.pack(fill="x")
+        self.busca.bind("<KeyRelease>", lambda e: self._filtrar())
+        self.filtro = ctk.CTkSegmentedButton(topo, values=list(self.FILTROS),
+                                             selected_color=AZUL, selected_hover_color=AZUL_HOVER,
+                                             command=lambda _: self._filtrar())
+        self.filtro.set("Todos")
+        self.filtro.pack(anchor="w", pady=(8, 0))
+        self.after(150, self.busca.focus_set)
+        self.grade = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.grade.pack(fill="both", expand=True, padx=10, pady=(0, 12))
+        for c in range(self.COLUNAS):
+            self.grade.grid_columnconfigure(c, weight=1)
+        self.celulas = []
+        for item in app.itens.lista_loja():
+            img = app.icones.imagem("item", item["id"], 44) or app.icones.vazio(44)
+            nome = item["nome"]
+            bt = ctk.CTkButton(self.grade, text=nome if len(nome) <= 12 else nome[:11] + "…",
+                               width=84, height=82, compound="top", image=img,
+                               fg_color="transparent", hover_color=BORDA, text_color=TEXTO,
+                               font=app.f_peq, command=lambda en=item["en"]: self._escolher(en))
+            if not coach.arquivo_imagem("item", item["id"]).exists():
+                def pronto(bt=bt, iid=item["id"]):
+                    im = self.app.icones.imagem("item", iid, 44)
+                    if im and bt.winfo_exists():
+                        bt.configure(image=im)
+                app.icones.imagem("item", item["id"], 44, ao_carregar=pronto)
+            self.celulas.append((nome.lower(), set(item["tags"]), bt))
+        self._filtrar()
+
+    def _filtrar(self):
+        texto = self.busca.get().strip().lower()
+        tags = self.FILTROS[self.filtro.get()]
+        i = 0
+        for nome, tags_item, bt in self.celulas:
+            if texto in nome and (tags is None or tags & tags_item):
+                bt.grid(row=i // self.COLUNAS, column=i % self.COLUNAS, padx=2, pady=2)
+                i += 1
+            else:
+                bt.grid_forget()
+
+    def _escolher(self, en):
+        self.ao_escolher(en)
+        self.destroy()
+
+
 class EditorBuild(ctk.CTkToplevel):
     """Janela para editar (ou criar) a build de um campeão."""
 
@@ -1526,7 +1595,7 @@ class EditorBuild(ctk.CTkToplevel):
         super().__init__(app, fg_color=FUNDO)
         self.app, self.cid = app, cid
         self.title("Editar build" if cid else "Nova build")
-        self.geometry("520x600")
+        self.geometry("560x620")
         self.transient(app)
         self.after(100, self.grab_set)
         b = (coach.obter_build(cid, getattr(app, "campeoes", {})) or {}) if cid else {}
@@ -1574,16 +1643,11 @@ class EditorBuild(ctk.CTkToplevel):
         self.runa.insert(0, b.get("runas", ""))
         self.runa.pack(fill="x")
 
-        rotulo("Itens, na ordem de compra (digite para filtrar)")
-        lista = app.itens.nomes_loja()
-        self.itens = []
-        atuais = [app.itens.nome_pt(i) for i in b.get("itens", [])]
-        for i in range(6):
-            cb = ctk.CTkComboBox(f, values=lista, border_color=BORDA)
-            cb.set(atuais[i] if i < len(atuais) else "")
-            cb.pack(fill="x", pady=2)
-            cb.bind("<KeyRelease>", lambda e, c=cb, l=lista: self._filtrar(c, l))
-            self.itens.append(cb)
+        rotulo("Itens, na ordem de compra (clique para escolher; ✕ tira; ‹ › mudam a ordem)")
+        self.slots: list[str | None] = (list(b.get("itens", [])) + [None] * 6)[:6]
+        self.area_itens = ctk.CTkFrame(f, fg_color="transparent")
+        self.area_itens.pack(fill="x", pady=(2, 0))
+        self._montar_slots()
 
         bts = ctk.CTkFrame(f, fg_color="transparent")
         bts.pack(fill="x", pady=(16, 0))
@@ -1599,6 +1663,66 @@ class EditorBuild(ctk.CTkToplevel):
         texto = cb.get().lower()
         cb.configure(values=[n for n in lista if texto in n.lower()][:40] or lista)
 
+    # -- espaços de item com imagem ---------------------------------------
+    def _montar_slots(self):
+        for w in self.area_itens.winfo_children():
+            w.destroy()
+        for i, nome in enumerate(self.slots):
+            cel = ctk.CTkFrame(self.area_itens, fg_color="transparent")
+            cel.grid(row=0, column=i, padx=3, sticky="n")
+            iid = self.app.itens.id(nome) if nome else None
+            if iid:
+                img = (self.app.icones.imagem("item", iid, 56)
+                       or self.app.icones.vazio(56))
+                bt = ctk.CTkButton(cel, text="", image=img, width=64, height=64,
+                                   fg_color="transparent", hover_color=BORDA,
+                                   command=lambda i=i: self._escolher_item(i))
+                if not coach.arquivo_imagem("item", iid).exists():
+                    def pronto(bt=bt, iid=iid):
+                        im = self.app.icones.imagem("item", iid, 56)
+                        if im and bt.winfo_exists():
+                            bt.configure(image=im)
+                    self.app.icones.imagem("item", iid, 56, ao_carregar=pronto)
+            else:
+                bt = ctk.CTkButton(cel, text="+", width=64, height=64, corner_radius=10,
+                                   font=ctk.CTkFont(size=24), fg_color="transparent",
+                                   border_width=2, border_color=BORDA, hover_color=BORDA,
+                                   text_color=TEXTO2, command=lambda i=i: self._escolher_item(i))
+            bt.pack()
+            texto = self.app.itens.nome_pt(nome) if nome else f"Item {i + 1}"
+            ctk.CTkLabel(cel, text=texto if len(texto) <= 12 else texto[:11] + "…", width=80,
+                         font=self.app.f_peq,
+                         text_color=TEXTO if nome else CINZA).pack()
+            if nome:
+                ctrl = ctk.CTkFrame(cel, fg_color="transparent")
+                ctrl.pack()
+                for txt, cmd in (("‹", lambda i=i: self._mover(i, -1)),
+                                 ("✕", lambda i=i: self._limpar(i)),
+                                 ("›", lambda i=i: self._mover(i, 1))):
+                    ctk.CTkButton(ctrl, text=txt, width=22, height=20, fg_color="transparent",
+                                  hover_color=BORDA, text_color=TEXTO2, font=self.app.f_peq,
+                                  command=cmd).pack(side="left", padx=1)
+
+    def _escolher_item(self, i):
+        SeletorItem(self, self.app, lambda en, i=i: self._definir(i, en))
+
+    def _definir(self, i, en):
+        self.slots[i] = en
+        self._montar_slots()
+
+    def _limpar(self, i):
+        self.slots[i] = None
+        # mantém os itens juntos, na ordem
+        cheios = [s for s in self.slots if s]
+        self.slots = (cheios + [None] * 6)[:6]
+        self._montar_slots()
+
+    def _mover(self, i, passo):
+        j = i + passo
+        if 0 <= j < len(self.slots) and self.slots[j]:
+            self.slots[i], self.slots[j] = self.slots[j], self.slots[i]
+            self._montar_slots()
+
     def _salvar(self):
         cid = self.cid
         if not cid:
@@ -1607,7 +1731,7 @@ class EditorBuild(ctk.CTkToplevel):
             if not cid:
                 self.erro.configure(text="Escolha um campeão da lista.")
                 return
-        itens = [self.app.itens.en_de_pt(c.get().strip()) for c in self.itens if c.get().strip()]
+        itens = [nome for nome in self.slots if nome]
         if not itens:
             self.erro.configure(text="Coloque pelo menos um item.")
             return

@@ -682,7 +682,7 @@ def ler_jogo(sessao: requests.Session) -> dict | None:
     return None
 
 
-VERSAO_CACHE = 4  # aumente quando o formato do cache mudar
+VERSAO_CACHE = 5  # aumente quando o formato do cache mudar
 
 
 def _versao_ddragon() -> str:
@@ -802,6 +802,7 @@ def carregar_itens() -> dict:
         en = requests.get(f"{base}/en_US/item.json", timeout=15).json()["data"]
         return {k: {"nome": v["name"], "en": en.get(k, {}).get("name", v["name"]),
                     "preco": v["gold"]["total"], "de": v.get("from", []),
+                    "tags": v.get("tags", []),
                     # aparece na lista do editor de builds (itens da loja de Summoner's Rift)
                     "loja": bool(v["gold"].get("purchasable") and v.get("maps", {}).get("11")
                                  and len(k) <= 4 and v["gold"]["total"] >= 700)}
@@ -868,6 +869,17 @@ class Itens:
 
     def id(self, nome_en: str) -> str | None:
         return self.por_nome.get(nome_en)
+
+    def lista_loja(self) -> list[dict]:
+        """Itens da loja sem repetir nome: [{id, nome, en, preco, tags}], por nome."""
+        vistos, lista = set(), []
+        for k in sorted(self.dados, key=lambda k: (len(k), k)):
+            d = self.dados[k]
+            if d.get("loja") and d["nome"] not in vistos:
+                vistos.add(d["nome"])
+                lista.append({"id": k, "nome": d["nome"], "en": d["en"], "preco": d["preco"],
+                              "tags": d.get("tags", [])})
+        return sorted(lista, key=lambda i: i["nome"].lower())
 
     def nomes_loja(self) -> list[str]:
         """Nomes em português dos itens da loja, em ordem alfabética."""
