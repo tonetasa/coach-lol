@@ -1811,7 +1811,7 @@ class EditorBuild(ctk.CTkToplevel):
         self.runa.insert(0, b.get("runas", ""))
         self.runa.pack(fill="x")
 
-        rotulo("Itens, na ordem de compra (clique para escolher; ✕ tira; ‹ › mudam a ordem)")
+        rotulo("Itens, na ordem de compra (clique para trocar; arraste para mudar a ordem; ✕ tira)")
         self.slots: list[str | None] = (list(b.get("itens", [])) + [None] * 6)[:6]
         self.area_itens = ctk.CTkFrame(f, fg_color="transparent")
         self.area_itens.pack(fill="x", pady=(2, 0))
@@ -1835,41 +1835,113 @@ class EditorBuild(ctk.CTkToplevel):
     def _montar_slots(self):
         for w in self.area_itens.winfo_children():
             w.destroy()
+        self.celulas = []
         for i, nome in enumerate(self.slots):
-            cel = ctk.CTkFrame(self.area_itens, fg_color="transparent")
+            cel = ctk.CTkFrame(self.area_itens, fg_color="transparent", corner_radius=10,
+                               border_width=2, border_color=FUNDO)
             cel.grid(row=0, column=i, padx=3, sticky="n")
+            self.celulas.append(cel)
             iid = self.app.itens.id(nome) if nome else None
             if iid:
+                # Ícone que se arrasta para mudar a ordem; clique simples troca o item
                 img = (self.app.icones.imagem("item", iid, 56)
                        or self.app.icones.vazio(56))
-                bt = ctk.CTkButton(cel, text="", image=img, width=64, height=64,
-                                   fg_color="transparent", hover_color=BORDA,
-                                   command=lambda i=i: self._escolher_item(i))
+                bt = ctk.CTkLabel(cel, text="", image=img, width=64, height=64,
+                                  corner_radius=10, fg_color="transparent", cursor="fleur")
                 if not coach.arquivo_imagem("item", iid).exists():
                     def pronto(bt=bt, iid=iid):
                         im = self.app.icones.imagem("item", iid, 56)
                         if im and bt.winfo_exists():
                             bt.configure(image=im)
                     self.app.icones.imagem("item", iid, 56, ao_carregar=pronto)
+                bt.bind("<Enter>", lambda e, b=bt: b.configure(fg_color=BORDA))
+                bt.bind("<Leave>", lambda e, b=bt: b.configure(fg_color="transparent"))
+                bt.bind("<ButtonPress-1>", lambda e, i=i: self._arrasto_inicio(e, i))
+                bt.bind("<B1-Motion>", self._arrasto_mover)
+                bt.bind("<ButtonRelease-1>", self._arrasto_fim)
             else:
                 bt = ctk.CTkButton(cel, text="+", width=64, height=64, corner_radius=10,
                                    font=ctk.CTkFont(size=24), fg_color="transparent",
                                    border_width=2, border_color=BORDA, hover_color=BORDA,
                                    text_color=TEXTO2, command=lambda i=i: self._escolher_item(i))
-            bt.pack()
+            bt.pack(padx=4, pady=(4, 0))
             texto = self.app.itens.nome_pt(nome) if nome else f"Item {i + 1}"
             ctk.CTkLabel(cel, text=texto if len(texto) <= 12 else texto[:11] + "…", width=80,
                          font=self.app.f_peq,
                          text_color=TEXTO if nome else CINZA).pack()
             if nome:
-                ctrl = ctk.CTkFrame(cel, fg_color="transparent")
-                ctrl.pack()
-                for txt, cmd in (("‹", lambda i=i: self._mover(i, -1)),
-                                 ("✕", lambda i=i: self._limpar(i)),
-                                 ("›", lambda i=i: self._mover(i, 1))):
-                    ctk.CTkButton(ctrl, text=txt, width=22, height=20, fg_color="transparent",
-                                  hover_color=BORDA, text_color=TEXTO2, font=self.app.f_peq,
-                                  command=cmd).pack(side="left", padx=1)
+                ctk.CTkButton(cel, text="✕", width=22, height=20, fg_color="transparent",
+                              hover_color=BORDA, text_color=TEXTO2, font=self.app.f_peq,
+                              command=lambda i=i: self._limpar(i)).pack(pady=(0, 4))
+
+    # ---- arrastar para mudar a ordem ------------------------------------------
+    def _arrasto_inicio(self, evento, i):
+        self.arrasto = {"de": i, "x": evento.x_root, "y": evento.y_root, "ativo": False,
+                        "fantasma": None, "alvo": i}
+
+    def _arrasto_mover(self, evento):
+        a = getattr(self, "arrasto", None)
+        if not a:
+            return
+        if not a["ativo"]:
+            if abs(evento.x_root - a["x"]) + abs(evento.y_root - a["y"]) < 6:
+                return  # ainda é um clique
+            a["ativo"] = True
+            a["fantasma"] = self._criar_fantasma(a["de"])
+        if a["fantasma"]:
+            a["fantasma"].geometry(f"+{evento.x_root - 28}+{evento.y_root - 28}")
+        alvo = self._slot_em(evento.x_root)
+        if alvo != a["alvo"]:
+            a["alvo"] = alvo
+            for j, cel in enumerate(self.celulas):
+                cel.configure(border_color=AZUL if j == alvo and j != a["de"] else FUNDO)
+
+    def _arrasto_fim(self, evento):
+        a = getattr(self, "arrasto", None)
+        self.arrasto = None
+        if not a:
+            return
+        if not a["ativo"]:
+            self._escolher_item(a["de"])  # foi só um clique
+            return
+        if a["fantasma"]:
+            a["fantasma"].destroy()
+        cheios = [s for s in self.slots if s]
+        alvo = min(self._slot_em(evento.x_root), len(cheios) - 1)
+        item = self.slots[a["de"]]
+        cheios.remove(item)
+        cheios.insert(alvo, item)
+        self.slots = (cheios + [None] * 6)[:6]
+        self._montar_slots()
+
+    def _slot_em(self, x_root):
+        """Índice da célula mais próxima da posição horizontal do mouse."""
+        centros = [c.winfo_rootx() + c.winfo_width() / 2 for c in self.celulas]
+        return min(range(len(centros)), key=lambda j: abs(centros[j] - x_root))
+
+    def _criar_fantasma(self, i):
+        """Cópia do ícone que segue o mouse enquanto arrasta."""
+        import tkinter as tk
+        from PIL import Image, ImageTk
+        iid = self.app.itens.id(self.slots[i])
+        arq = coach.arquivo_imagem("item", iid) if iid else None
+        if not arq or not arq.exists():
+            return None
+        try:
+            img = ImageTk.PhotoImage(Image.open(arq).convert("RGBA").resize((56, 56)))
+        except Exception:  # noqa: BLE001
+            return None
+        janela = tk.Toplevel(self)
+        janela.overrideredirect(True)
+        janela.attributes("-topmost", True)
+        try:
+            janela.attributes("-alpha", 0.85)
+        except tk.TclError:
+            pass
+        rotulo = tk.Label(janela, image=img, bd=0, bg=FUNDO[1] if isinstance(FUNDO, tuple) else FUNDO)
+        rotulo.image = img
+        rotulo.pack()
+        return janela
 
     def _escolher_item(self, i):
         SeletorItem(self, self.app, lambda en, i=i: self._definir(i, en))
@@ -1884,12 +1956,6 @@ class EditorBuild(ctk.CTkToplevel):
         cheios = [s for s in self.slots if s]
         self.slots = (cheios + [None] * 6)[:6]
         self._montar_slots()
-
-    def _mover(self, i, passo):
-        j = i + passo
-        if 0 <= j < len(self.slots) and self.slots[j]:
-            self.slots[i], self.slots[j] = self.slots[j], self.slots[i]
-            self._montar_slots()
 
     def _salvar(self):
         cid = self.cid

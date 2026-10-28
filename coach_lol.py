@@ -35,6 +35,7 @@ Ao fim de cada partida, salva um resumo em ./partidas/ para revisarmos juntos.
 
 import argparse
 import json
+import logging
 import os
 import queue
 import sys
@@ -650,24 +651,52 @@ class Voz:
             self._thread.start()
 
     def _loop(self):
-        import pyttsx3
-        motor = pyttsx3.init()
+        # Um erro aqui não pode matar a thread (senão o app fica mudo para sempre):
+        # registra, recria o motor de voz e segue com a próxima frase.
+        while True:
+            try:
+                if sys.platform == "win32":
+                    self._loop_sapi()
+                else:
+                    self._loop_pyttsx3()
+            except Exception as e:  # noqa: BLE001
+                logging.getLogger("quiron").warning("Falha na voz: %r", e)
+                time.sleep(1)
+
+    def _loop_sapi(self):
+        """Voz do Windows (SAPI) direto, sem o pyttsx3.
+
+        O pyttsx3 2.99 no Windows só fala a primeira frase de cada motor; o
+        SAPI direto fala quantas vezes for preciso e também aceita as vozes
+        novas do Windows (OneCore), que o pyttsx3 não enxerga.
+        """
+        import comtypes
+        import comtypes.client
+        comtypes.CoInitialize()
+        sapi = comtypes.client.CreateObject("SAPI.SpVoice")
         usando = (None, None)
         while True:
             frase = self.fila.get()
             escolha = (CONFIG.get("voz_windows", ""), CONFIG.get("velocidade_voz", 185))
             if escolha != usando:  # voz ou velocidade mudou nas configurações
                 usando = escolha
-                ids = [v.id for v in motor.getProperty("voices")]
-                if escolha[0] in ids:
-                    motor.setProperty("voice", escolha[0])
-                else:
-                    for v in motor.getProperty("voices"):
-                        nome = (v.name + " " + v.id).lower()
-                        if any(x in nome for x in ("portug", "brazil", "pt-br", "maria")):
-                            motor.setProperty("voice", v.id)
-                            break
-                motor.setProperty("rate", escolha[1])
+                token = _token_voz(sapi, escolha[0])
+                if token is not None:
+                    try:
+                        sapi.Voice = token
+                    except Exception:  # noqa: BLE001 (voz que o SAPI não aceita)
+                        padrao = _token_voz(sapi, "")
+                        if padrao is not None:
+                            sapi.Voice = padrao
+                sapi.Rate = _taxa_sapi(escolha[1])
+            sapi.Speak(frase, 0)  # 0 = síncrono: espera terminar de falar
+
+    def _loop_pyttsx3(self):
+        import pyttsx3
+        motor = pyttsx3.init()
+        while True:
+            frase = self.fila.get()
+            motor.setProperty("rate", CONFIG.get("velocidade_voz", 185))
             motor.say(frase)
             motor.runAndWait()
 
@@ -684,16 +713,43 @@ class Voz:
 # ---------------------------------------------------------------------------
 # Comandos de voz (offline, Vosk)
 # ---------------------------------------------------------------------------
+def _taxa_sapi(palavras_por_minuto: int) -> int:
+    """Converte palavras por minuto para a escala do SAPI (-10 a 10), como o pyttsx3."""
+    import math
+    return max(-10, min(10, round(math.log(palavras_por_minuto / 200, 1.1))))
+
+
+def _token_voz(sapi, vid: str):
+    """Token da voz escolhida; sem escolha (ou se sumiu), a primeira em português."""
+    import comtypes.client
+    if vid:
+        try:
+            token = comtypes.client.CreateObject("SAPI.SpObjectToken")
+            token.SetId(vid, "", False)
+            return token
+        except Exception:  # noqa: BLE001 (voz desinstalada)
+            pass
+    vozes = sapi.GetVoices()
+    for i in range(vozes.Count):
+        t = vozes.Item(i)
+        desc = (t.GetDescription() + " " + t.Id).lower()
+        if any(x in desc for x in ("portug", "brazil", "pt-br", "maria")):
+            return t
+    return None
+
+
 def listar_vozes() -> list[tuple[str, str]]:
-    """Vozes SAPI instaladas no Windows: [(nome, id)]. O id é o que o pyttsx3 usa."""
+    """Vozes instaladas no Windows: [(nome, id)], inclusive as novas (OneCore)."""
     try:
         import winreg
     except ImportError:
         return []
     vozes = []
-    caminho = r"SOFTWARE\Microsoft\Speech\Voices\Tokens"
-    for raiz, nome_raiz in ((winreg.HKEY_LOCAL_MACHINE, "HKEY_LOCAL_MACHINE"),
-                            (winreg.HKEY_CURRENT_USER, "HKEY_CURRENT_USER")):
+    for raiz, nome_raiz, caminho in (
+            (winreg.HKEY_LOCAL_MACHINE, "HKEY_LOCAL_MACHINE", r"SOFTWARE\Microsoft\Speech\Voices\Tokens"),
+            (winreg.HKEY_CURRENT_USER, "HKEY_CURRENT_USER", r"SOFTWARE\Microsoft\Speech\Voices\Tokens"),
+            (winreg.HKEY_LOCAL_MACHINE, "HKEY_LOCAL_MACHINE",
+             r"SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens")):
         try:
             chave = winreg.OpenKey(raiz, caminho)
         except OSError:
@@ -710,7 +766,7 @@ def listar_vozes() -> list[tuple[str, str]]:
             except OSError:
                 nome = token
             vid = f"{nome_raiz}\\{caminho}\\{token}"
-            if all(vid != v[1] for v in vozes):
+            if all(vid != v[1] and nome != v[0] for v in vozes):
                 vozes.append((nome, vid))
     return vozes
 

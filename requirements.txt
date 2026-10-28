@@ -6,3 +6,4 @@ customtkinter
 pystray
 pillow
 keyring
+comtypes; sys_platform == "win32"
