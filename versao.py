@@ -1,6 +1,6 @@
 """Versão do Quíron — o único lugar para mudar ao lançar uma versão nova."""
 
-VERSAO = "2.2.1"
+VERSAO = "2.3.0"
 AUTOR = "Matheus"
 NOME = "Quíron"
 DESCRICAO = "Coach por voz para League of Legends"

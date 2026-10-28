@@ -304,8 +304,8 @@ def salvar_build_usuario(cid: str, build: dict):
     dados = _ler_json(ARQ_BUILDS_USUARIO)
     atual = BUILDS.get(cid, {})
     dados[cid] = {k: build[k] for k in ("funcao", "runas", "itens", "ajustes", "pagina",
-                                        "feiticos") if k in build}
-    for k in ("pagina", "feiticos"):  # mantém a página de runas e feitiços que já existiam
+                                        "feiticos", "inicio") if k in build}
+    for k in ("pagina", "feiticos", "inicio"):  # mantém a página de runas e feitiços que já existiam
         if k not in dados[cid] and k in atual:
             dados[cid][k] = atual[k]
     ARQ_BUILDS_USUARIO.write_text(json.dumps(dados, ensure_ascii=False, indent=2),
@@ -370,7 +370,7 @@ def pagina(primaria, runas, secundaria, runas2, fragmentos):
 
 
 BUILDS_PADRAO = {
-    "Fiddlesticks": {"pagina": pagina("Domination", ["Electrocute", "Cheap Shot", "Grisly Mementos", "Ultimate Hunter"], "Sorcery", ["Axiom Arcanist", "Transcendence"], ["adaptativo", "adaptativo", "vida_escalavel"]),
+    "Fiddlesticks": {"inicio": ["Gustwalker Hatchling"], "pagina": pagina("Domination", ["Electrocute", "Cheap Shot", "Grisly Mementos", "Ultimate Hunter"], "Sorcery", ["Axiom Arcanist", "Transcendence"], ["adaptativo", "adaptativo", "vida_escalavel"]),
         "feiticos": ["Flash", "Smite"], "funcao": "JUNGLE", "runas": "Eletrocutar",
                      "itens": ["Malignance", "Sorcerer's Shoes", "Liandry's Torment",
                                "Zhonya's Hourglass"],
@@ -682,7 +682,7 @@ def ler_jogo(sessao: requests.Session) -> dict | None:
     return None
 
 
-VERSAO_CACHE = 3  # aumente quando o formato do cache mudar
+VERSAO_CACHE = 4  # aumente quando o formato do cache mudar
 
 
 def _versao_ddragon() -> str:
@@ -726,25 +726,72 @@ CACHE_ITENS = BASE / "itens_cache.json"
 PASTA_ICONES = BASE / "icones"
 
 
-def baixar_icone(cid: str) -> Path | None:
-    """Ícone quadrado do campeão (Data Dragon), guardado em cache local."""
-    arq = PASTA_ICONES / f"{cid}.png"
+CDRAGON_FRAGMENTOS = "https://raw.communitydragon.org/latest/game/assets/perks/statmods/"
+ARQ_FRAGMENTO = {
+    "adaptativo": "statmodsadaptiveforceicon", "vel_ataque": "statmodsattackspeedicon",
+    "aceleracao": "statmodscdrscalingicon", "vel_movimento": "statmodsmovementspeedicon",
+    "vida_escalavel": "statmodshealthscalingicon", "vida": "statmodshealthplusicon",
+    "tenacidade": "statmodstenacityicon",
+}
+NOME_FRAGMENTO = {
+    "adaptativo": "Força Adaptativa", "vel_ataque": "Velocidade de Ataque",
+    "aceleracao": "Aceleração de Habilidade", "vel_movimento": "Velocidade de Movimento",
+    "vida_escalavel": "Vida (por nível)", "vida": "Vida", "tenacidade": "Tenacidade",
+}
+# As três linhas de fragmentos, como no cliente
+LINHAS_FRAGMENTOS = [["adaptativo", "vel_ataque", "aceleracao"],
+                     ["adaptativo", "vel_movimento", "vida_escalavel"],
+                     ["vida", "tenacidade", "vida_escalavel"]]
+
+
+def versao_dados() -> str:
+    try:
+        return json.loads(CACHE_CAMPEOES.read_text(encoding="utf-8"))["versao"]
+    except (OSError, ValueError, KeyError):
+        return _versao_ddragon()
+
+
+def url_imagem(tipo: str, ident: str) -> str:
+    """tipo: campeao (id), item (id), runa (caminho do ícone), fragmento (apelido)."""
+    if tipo == "campeao":
+        return f"{DDRAGON}/cdn/{versao_dados()}/img/champion/{ident}.png"
+    if tipo == "item":
+        return f"{DDRAGON}/cdn/{versao_dados()}/img/item/{ident}.png"
+    if tipo == "runa":
+        return f"{DDRAGON}/cdn/img/{ident}"
+    if tipo == "fragmento":
+        return CDRAGON_FRAGMENTOS + ARQ_FRAGMENTO[ident] + ".png"
+    raise ValueError(tipo)
+
+
+def arquivo_imagem(tipo: str, ident: str) -> Path:
+    nome = ident.replace("/", "_").replace("\\", "_")
+    if not nome.endswith(".png"):
+        nome += ".png"
+    pasta = PASTA_ICONES if tipo == "campeao" else PASTA_ICONES / tipo
+    return pasta / nome
+
+
+def baixar_imagem(tipo: str, ident: str) -> Path | None:
+    """Baixa (uma vez) e guarda a imagem em cache local."""
+    arq = arquivo_imagem(tipo, ident)
     if arq.exists():
         return arq
     try:
-        try:
-            versao = json.loads(CACHE_CAMPEOES.read_text(encoding="utf-8"))["versao"]
-        except (OSError, ValueError, KeyError):
-            versao = _versao_ddragon()
-        r = requests.get(f"{DDRAGON}/cdn/{versao}/img/champion/{cid}.png", timeout=10)
+        r = requests.get(url_imagem(tipo, ident), timeout=10)
         r.raise_for_status()
-        PASTA_ICONES.mkdir(parents=True, exist_ok=True)
+        arq.parent.mkdir(parents=True, exist_ok=True)
         tmp = arq.with_suffix(".tmp")
         tmp.write_bytes(r.content)
         tmp.replace(arq)
         return arq
-    except (requests.RequestException, OSError):
+    except (requests.RequestException, OSError, KeyError):
         return None
+
+
+def baixar_icone(cid: str) -> Path | None:
+    """Ícone quadrado do campeão (Data Dragon), guardado em cache local."""
+    return baixar_imagem("campeao", cid)
 
 
 def carregar_itens() -> dict:
@@ -773,7 +820,7 @@ def carregar_runas() -> dict:
         base = f"{DDRAGON}/cdn/{versao}/data"
         en = requests.get(f"{base}/en_US/runesReforged.json", timeout=15).json()
         pt = requests.get(f"{base}/pt_BR/runesReforged.json", timeout=15).json()
-        dados = {"arvores": {}, "runas": {}, "pt": {}}
+        dados = {"arvores": {}, "runas": {}, "pt": {}, "detalhe": []}
         for arvore in en:
             dados["arvores"][arvore["name"]] = arvore["id"]
             for slot in arvore["slots"]:
@@ -781,6 +828,12 @@ def carregar_runas() -> dict:
                     dados["runas"][r["name"]] = r["id"]
         for arvore in pt:
             dados["pt"][str(arvore["id"])] = arvore["name"]
+            # estrutura completa (para desenhar a página como no cliente)
+            dados["detalhe"].append({
+                "id": arvore["id"], "nome": arvore["name"], "icone": arvore["icon"],
+                "fileiras": [[{"id": r["id"], "nome": r["name"], "icone": r["icon"]}
+                              for r in slot["runes"]] for slot in arvore["slots"]],
+            })
             for slot in arvore["slots"]:
                 for r in slot["runes"]:
                     dados["pt"][str(r["id"])] = r["name"]

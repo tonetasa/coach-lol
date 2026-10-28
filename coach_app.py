@@ -119,28 +119,40 @@ def iniciar_com_windows(ligar: bool) -> bool:
 
 
 class Icones:
-    """Ícones dos campeões: baixa em segundo plano e entrega CTkImage arredondada."""
+    """Imagens do jogo (campeões, itens, runas, fragmentos).
+
+    Baixa em segundo plano, guarda em cache no PC e entrega CTkImage pronta,
+    com cantos arredondados e, se pedido, "apagada" (cinza e transparente),
+    como as runas não escolhidas no cliente do LoL.
+    """
 
     def __init__(self, fila: queue.Queue):
         from concurrent.futures import ThreadPoolExecutor
         self.fila = fila
-        self.cache: dict[tuple[str, int], ctk.CTkImage] = {}
-        self.pendentes: dict[str, list] = {}
+        self.cache: dict[tuple, ctk.CTkImage] = {}
+        self.pendentes: dict[tuple, list] = {}
         self.pool = ThreadPoolExecutor(max_workers=8)
         self.trava = threading.Lock()
 
-    def _carregar(self, cid: str, tamanho: int):
-        from PIL import Image, ImageDraw
-        arq = coach.PASTA_ICONES / f"{cid}.png"
+    def _carregar(self, tipo, ident, tamanho, apagada, raio):
+        from PIL import Image, ImageDraw, ImageOps
+        arq = coach.arquivo_imagem(tipo, ident)
         img = Image.open(arq).convert("RGBA").resize((tamanho * 2, tamanho * 2), Image.LANCZOS)
-        mascara = Image.new("L", img.size, 0)
-        ImageDraw.Draw(mascara).rounded_rectangle((0, 0, *img.size), radius=tamanho // 3, fill=255)
-        img.putalpha(mascara)
+        if raio:
+            mascara = Image.new("L", img.size, 0)
+            ImageDraw.Draw(mascara).rounded_rectangle((0, 0, *img.size), radius=raio * 2,
+                                                      fill=255)
+            alfa = Image.composite(img.getchannel("A"), mascara, mascara)
+            img.putalpha(alfa)
+        if apagada:
+            alfa = img.getchannel("A").point(lambda a: int(a * 0.35))
+            img = ImageOps.grayscale(img.convert("RGB")).convert("RGBA")
+            img.putalpha(alfa)
         return ctk.CTkImage(light_image=img, dark_image=img, size=(tamanho, tamanho))
 
     def vazio(self, tamanho: int):
         """Quadrado cinza do tamanho do ícone, enquanto ele baixa."""
-        chave = ("", tamanho)
+        chave = ("", "", tamanho)
         if chave not in self.cache:
             from PIL import Image, ImageDraw
             img = Image.new("RGBA", (tamanho * 2, tamanho * 2), (0, 0, 0, 0))
@@ -150,37 +162,59 @@ class Icones:
                                              size=(tamanho, tamanho))
         return self.cache[chave]
 
-    def obter(self, cid: str, tamanho: int, ao_carregar=None):
-        """CTkImage se o ícone já está no PC; senão baixa e chama ao_carregar() depois."""
-        chave = (cid, tamanho)
+    def imagem(self, tipo: str, ident: str, tamanho: int, ao_carregar=None,
+               apagada: bool = False, raio: int | None = None):
+        """CTkImage se já está no PC; senão baixa e chama ao_carregar() depois."""
+        if raio is None:
+            raio = {"campeao": tamanho // 3, "item": max(3, tamanho // 8)}.get(tipo, 0)
+        chave = (tipo, ident, tamanho, apagada, raio)
         if chave in self.cache:
             return self.cache[chave]
-        if (coach.PASTA_ICONES / f"{cid}.png").exists():
+        arq = coach.arquivo_imagem(tipo, ident)
+        if arq.exists():
             try:
-                self.cache[chave] = self._carregar(cid, tamanho)
+                self.cache[chave] = self._carregar(tipo, ident, tamanho, apagada, raio)
                 return self.cache[chave]
             except Exception:  # noqa: BLE001 (arquivo corrompido: baixa de novo)
-                (coach.PASTA_ICONES / f"{cid}.png").unlink(missing_ok=True)
+                arq.unlink(missing_ok=True)
+        pend = (tipo, ident)
         with self.trava:
-            ja_baixando = cid in self.pendentes
-            self.pendentes.setdefault(cid, [])
+            ja_baixando = pend in self.pendentes
+            self.pendentes.setdefault(pend, [])
             if ao_carregar:
-                self.pendentes[cid].append(ao_carregar)
+                self.pendentes[pend].append(ao_carregar)
         if not ja_baixando:
-            self.pool.submit(self._baixar, cid)
+            self.pool.submit(self._baixar, tipo, ident)
         return None
 
-    def _baixar(self, cid: str):
-        coach.baixar_icone(cid)
+    def obter(self, cid: str, tamanho: int, ao_carregar=None):
+        """Atalho para o ícone de campeão."""
+        return self.imagem("campeao", cid, tamanho, ao_carregar)
+
+    def _baixar(self, tipo: str, ident: str):
+        coach.baixar_imagem(tipo, ident)
         with self.trava:
-            chamadas = self.pendentes.pop(cid, [])
+            chamadas = self.pendentes.pop((tipo, ident), [])
         if chamadas:
             self.fila.put(("icone", chamadas))
 
     def pre_carregar(self, cids):
         for cid in cids:
-            if not (coach.PASTA_ICONES / f"{cid}.png").exists():
+            if not coach.arquivo_imagem("campeao", cid).exists():
                 self.obter(cid, 48)
+
+    def rotulo(self, pai, tipo, ident, tamanho, apagada=False, **kw):
+        """CTkLabel com a imagem (mostra um quadrado cinza até baixar)."""
+        lb = ctk.CTkLabel(pai, text="", width=tamanho, height=tamanho, **kw)
+
+        def pronto():
+            img = self.imagem(tipo, ident, tamanho, apagada=apagada)
+            if img and lb.winfo_exists():
+                lb.configure(image=img)
+
+        img = self.imagem(tipo, ident, tamanho, ao_carregar=pronto, apagada=apagada)
+        lb.configure(image=img or self.vazio(tamanho))
+        return lb
 
 
 class SaidaParaFila:
@@ -215,6 +249,8 @@ class App(ctk.CTk):
         self.itens = coach.Itens({})
         self.campeoes: dict = {}
         self.icones = Icones(self.fila)
+        self.runas: dict = {}
+        self.builds_abertas: set[str] = set()
 
         self.migrados = coach.migrar_dados_antigos() if getattr(sys, "frozen", False) else 0
         registro.configurar(coach.BASE, VERSAO)
@@ -383,11 +419,10 @@ class App(ctk.CTk):
                 card.pack(fill="x", padx=2, pady=4)
                 topo = ctk.CTkFrame(card, fg_color="transparent")
                 topo.pack(fill="x", padx=16, pady=(10, 2))
-                self._icone_label(topo, cid, 30).pack(side="left", padx=(0, 10))
+                self._icone_label(topo, cid, 36).pack(side="left", padx=(0, 10))
                 ctk.CTkLabel(topo, text=self._nome_campeao(cid), font=self.f_sub).pack(side="left")
-                ctk.CTkLabel(topo, text=f"   {nomes_funcao.get(b['funcao'], b['funcao'])} · "
-                             f"runa {b['runas']}", font=self.f_peq,
-                             text_color=TEXTO2).pack(side="left", pady=(2, 0))
+                ctk.CTkLabel(topo, text=f"   {nomes_funcao.get(b['funcao'], b['funcao'])}",
+                             font=self.f_peq, text_color=TEXTO2).pack(side="left", pady=(2, 0))
                 selo = ("personalizada" if b.get("personalizado") else
                         "estimativa" if b.get("estimativa") else
                         "genérica" if b.get("generica") else "")
@@ -395,6 +430,10 @@ class App(ctk.CTk):
                     ctk.CTkLabel(topo, text=f"  {selo}", font=self.f_peq,
                                  text_color=OURO if selo == "personalizada" else CINZA).pack(
                         side="left", pady=(2, 0))
+                aberto = cid in self.builds_abertas
+                self._botao_secundario(topo, "Runas ▴" if aberto else "Runas ▾",
+                                       lambda c=cid: self._alternar_runas(c), 80).pack(
+                    side="right", padx=(6, 0))
                 self._botao_secundario(topo, "Editar", lambda c=cid: self._editar_build(c),
                                        70).pack(side="right")
                 if b.get("personalizado"):
@@ -408,9 +447,99 @@ class App(ctk.CTk):
                 if v + d:
                     ctk.CTkLabel(topo, text=f"{round(100 * v / (v + d))}% em {v + d}   ",
                                  font=self.f_peq, text_color=OURO).pack(side="right")
-                itens = "   →   ".join(self.itens.nome_pt(i) for i in b["itens"]) or "(sem itens)"
-                ctk.CTkLabel(card, text=itens, font=self.f_txt, justify="left",
-                             wraplength=640).pack(anchor="w", padx=16, pady=(0, 12))
+                self._linha_itens(card, b)
+                if aberto:
+                    self._pagina_runas(card, b)
+
+    # ---- itens e página de runas (visual do cliente) -------------------------
+    def _alternar_runas(self, cid):
+        self.builds_abertas ^= {cid}
+        self._preencher_builds()
+
+    def _linha_itens(self, card, b):
+        linha = ctk.CTkFrame(card, fg_color="transparent")
+        linha.pack(fill="x", padx=14, pady=(2, 12))
+        blocos = []
+        if b.get("inicio"):
+            blocos.append(("Início", b["inicio"][:1]))
+        blocos.append(("", b["itens"]))
+        for titulo, itens in blocos:
+            for n, nome in enumerate(itens):
+                iid = self.itens.id(nome)
+                cel = ctk.CTkFrame(linha, fg_color="transparent")
+                cel.pack(side="left", padx=(0, 2))
+                if iid:
+                    self.icones.rotulo(cel, "item", iid, 40).pack()
+                rotulo = self.itens.nome_pt(nome)
+                ctk.CTkLabel(cel, text=rotulo if len(rotulo) <= 14 else rotulo[:13] + "…",
+                             font=self.f_peq, text_color=TEXTO2, width=92).pack()
+                if titulo:
+                    ctk.CTkLabel(linha, text="|", text_color=BORDA, font=self.f_sub).pack(
+                        side="left", padx=6, pady=(0, 18))
+                elif n < len(itens) - 1:
+                    ctk.CTkLabel(linha, text="›", text_color=CINZA,
+                                 font=ctk.CTkFont(size=20)).pack(side="left", pady=(0, 18))
+
+    def _pagina_runas(self, card, b):
+        """Página de runas como no cliente: escolhidas acesas, as outras apagadas."""
+        pag, runas = b.get("pagina"), self.runas
+        if not pag or not runas.get("detalhe"):
+            ctk.CTkLabel(card, text="Página de runas indisponível para esta build.",
+                         font=self.f_peq, text_color=CINZA).pack(anchor="w", padx=16, pady=(0, 12))
+            return
+        escolhidas = {runas["runas"].get(n) for n in pag["runas"] + pag["runas2"]}
+        arvores = {a["id"]: a for a in runas["detalhe"]}
+        prim = arvores.get(runas["arvores"].get(pag["primaria"]))
+        sec = arvores.get(runas["arvores"].get(pag["secundaria"]))
+        if not prim or not sec:
+            return
+        painel = ctk.CTkFrame(card, fg_color=FUNDO, corner_radius=10)
+        painel.pack(fill="x", padx=14, pady=(0, 14))
+
+        def coluna(arvore, fileiras, tam_chave):
+            col = ctk.CTkFrame(painel, fg_color="transparent")
+            col.pack(side="left", anchor="n", padx=(14, 18), pady=12)
+            cab = ctk.CTkFrame(col, fg_color="transparent")
+            cab.pack(anchor="w", pady=(0, 6))
+            self.icones.rotulo(cab, "runa", arvore["icone"], 22).pack(side="left", padx=(0, 6))
+            ctk.CTkLabel(cab, text=arvore["nome"], font=self.f_sub).pack(side="left")
+            nomes = []
+            for i, fileira in fileiras:
+                lin = ctk.CTkFrame(col, fg_color="transparent")
+                lin.pack(anchor="w", pady=3)
+                tam = tam_chave if i == 0 else 30
+                for r in fileira:
+                    ativa = r["id"] in escolhidas
+                    if ativa:
+                        nomes.append(r["nome"])
+                    self.icones.rotulo(lin, "runa", r["icone"], tam, apagada=not ativa).pack(
+                        side="left", padx=4)
+            ctk.CTkLabel(col, text="\n".join(nomes), font=self.f_peq, text_color=TEXTO2,
+                         justify="left").pack(anchor="w", pady=(6, 0))
+
+        coluna(prim, list(enumerate(prim["fileiras"])), 44)
+        coluna(sec, [(i, f) for i, f in enumerate(sec["fileiras"]) if i > 0], 30)
+
+        col = ctk.CTkFrame(painel, fg_color="transparent")
+        col.pack(side="left", anchor="n", padx=(4, 14), pady=12)
+        ctk.CTkLabel(col, text="Fragmentos", font=self.f_sub).pack(anchor="w", pady=(0, 6))
+        nomes = []
+        for linha_opcoes, escolhido in zip(coach.LINHAS_FRAGMENTOS, pag["fragmentos"]):
+            lin = ctk.CTkFrame(col, fg_color="transparent")
+            lin.pack(anchor="w", pady=4)
+            for op in linha_opcoes:
+                self.icones.rotulo(lin, "fragmento", op, 22, apagada=op != escolhido,
+                                   fg_color=BORDA if op == escolhido else "transparent",
+                                   corner_radius=11).pack(side="left", padx=4)
+            nomes.append(coach.NOME_FRAGMENTO.get(escolhido, escolhido))
+        ctk.CTkLabel(col, text="\n".join(nomes), font=self.f_peq, text_color=TEXTO2,
+                     justify="left").pack(anchor="w", pady=(6, 0))
+        if b.get("feiticos"):
+            ctk.CTkLabel(col, text="Feitiços: " + " + ".join(
+                {"Flash": "Flash", "Smite": "Golpear", "Heal": "Curar", "Ignite": "Incendiar",
+                 "Exhaust": "Exaustão", "Barrier": "Barreira", "Teleport": "Teleporte",
+                 "Cleanse": "Purificar", "Ghost": "Fantasma"}.get(f, f) for f in b["feiticos"]),
+                font=self.f_peq, text_color=TEXTO2).pack(anchor="w", pady=(8, 0))
 
     def _pedir_build(self, cid):
         from urllib.parse import quote
@@ -822,6 +951,7 @@ class App(ctk.CTk):
     def _carregar_itens(self):
         self.fila.put(("itens", coach.carregar_itens()))
         self.fila.put(("campeoes", coach.carregar_campeoes()))
+        self.fila.put(("runas", coach.carregar_runas()))
 
     def _verificacoes(self):
         if coach.CONFIG["builds_automaticas"]:
@@ -993,6 +1123,10 @@ class App(ctk.CTk):
                 elif tipo == "itens":
                     self.itens = coach.Itens(valor)
                     self._preencher_builds()
+                elif tipo == "runas":
+                    self.runas = valor
+                    if self.builds_abertas:
+                        self._preencher_builds()
                 elif tipo == "icone":
                     for chamada in valor:
                         try:
@@ -1485,7 +1619,7 @@ class EditorBuild(ctk.CTkToplevel):
         }
         if not self.cid:  # campeão novo: começa da build genérica (runas e feitiços)
             self.base = coach.obter_build(cid, self.app.campeoes, nova["funcao"]) or {}
-        for k in ("pagina", "feiticos"):
+        for k in ("pagina", "feiticos", "inicio"):
             if self.base.get(k):
                 nova[k] = self.base[k]
         coach.salvar_build_usuario(cid, nova)

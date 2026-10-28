@@ -34,7 +34,10 @@
         "Liandry's Torment",
         "Zhonya's Hourglass"
       ],
-      "ajustes": "mago"
+      "ajustes": "mago",
+      "inicio": [
+        "Gustwalker Hatchling"
+      ]
     },
     "Karma": {
       "pagina": {
