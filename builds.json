@@ -3,6 +3,29 @@
   "atualizado": "2026-10-28",
   "campeoes": {
     "Fiddlesticks": {
+      "pagina": {
+        "primaria": "Domination",
+        "runas": [
+          "Electrocute",
+          "Cheap Shot",
+          "Grisly Mementos",
+          "Ultimate Hunter"
+        ],
+        "secundaria": "Sorcery",
+        "runas2": [
+          "Axiom Arcanist",
+          "Transcendence"
+        ],
+        "fragmentos": [
+          "adaptativo",
+          "adaptativo",
+          "vida_escalavel"
+        ]
+      },
+      "feiticos": [
+        "Flash",
+        "Smite"
+      ],
       "funcao": "JUNGLE",
       "runas": "Eletrocutar",
       "itens": [
@@ -14,6 +37,29 @@
       "ajustes": "mago"
     },
     "Karma": {
+      "pagina": {
+        "primaria": "Sorcery",
+        "runas": [
+          "Summon Aery",
+          "Manaflow Band",
+          "Transcendence",
+          "Gathering Storm"
+        ],
+        "secundaria": "Resolve",
+        "runas2": [
+          "Font of Life",
+          "Revitalize"
+        ],
+        "fragmentos": [
+          "aceleracao",
+          "adaptativo",
+          "vida"
+        ]
+      },
+      "feiticos": [
+        "Flash",
+        "Heal"
+      ],
       "funcao": "UTILITY",
       "runas": "Aery",
       "itens": [
@@ -25,6 +71,29 @@
       "ajustes": "encantador"
     },
     "Lulu": {
+      "pagina": {
+        "primaria": "Sorcery",
+        "runas": [
+          "Summon Aery",
+          "Manaflow Band",
+          "Transcendence",
+          "Scorch"
+        ],
+        "secundaria": "Resolve",
+        "runas2": [
+          "Bone Plating",
+          "Revitalize"
+        ],
+        "fragmentos": [
+          "aceleracao",
+          "adaptativo",
+          "vida_escalavel"
+        ]
+      },
+      "feiticos": [
+        "Flash",
+        "Heal"
+      ],
       "funcao": "UTILITY",
       "runas": "Aery",
       "itens": [
@@ -36,6 +105,29 @@
       "ajustes": "encantador"
     },
     "Seraphine": {
+      "pagina": {
+        "primaria": "Sorcery",
+        "runas": [
+          "Summon Aery",
+          "Manaflow Band",
+          "Transcendence",
+          "Gathering Storm"
+        ],
+        "secundaria": "Resolve",
+        "runas2": [
+          "Font of Life",
+          "Revitalize"
+        ],
+        "fragmentos": [
+          "aceleracao",
+          "adaptativo",
+          "vida"
+        ]
+      },
+      "feiticos": [
+        "Flash",
+        "Heal"
+      ],
       "funcao": "UTILITY",
       "runas": "Aery",
       "itens": [
@@ -47,6 +139,29 @@
       "ajustes": "encantador"
     },
     "Morgana": {
+      "pagina": {
+        "primaria": "Sorcery",
+        "runas": [
+          "Arcane Comet",
+          "Manaflow Band",
+          "Transcendence",
+          "Scorch"
+        ],
+        "secundaria": "Domination",
+        "runas2": [
+          "Cheap Shot",
+          "Ultimate Hunter"
+        ],
+        "fragmentos": [
+          "adaptativo",
+          "adaptativo",
+          "vida_escalavel"
+        ]
+      },
+      "feiticos": [
+        "Flash",
+        "Ignite"
+      ],
       "funcao": "UTILITY",
       "runas": "Cometa Arcano",
       "itens": [
@@ -58,6 +173,29 @@
       "ajustes": "mago"
     },
     "Milio": {
+      "pagina": {
+        "primaria": "Sorcery",
+        "runas": [
+          "Summon Aery",
+          "Manaflow Band",
+          "Transcendence",
+          "Scorch"
+        ],
+        "secundaria": "Resolve",
+        "runas2": [
+          "Bone Plating",
+          "Revitalize"
+        ],
+        "fragmentos": [
+          "aceleracao",
+          "adaptativo",
+          "vida_escalavel"
+        ]
+      },
+      "feiticos": [
+        "Flash",
+        "Heal"
+      ],
       "funcao": "UTILITY",
       "runas": "Aery",
       "itens": [

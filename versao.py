@@ -1,6 +1,6 @@
 """Versão do Coach LoL — o único lugar para mudar ao lançar uma versão nova."""
 
-VERSAO = "1.0.0"
+VERSAO = "1.1.0"
 AUTOR = "Matheus"
 NOME = "Coach LoL"
 DESCRICAO = "Coach por voz para League of Legends"

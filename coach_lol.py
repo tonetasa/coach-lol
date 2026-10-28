@@ -45,6 +45,9 @@ from pathlib import Path
 import requests
 import urllib3
 
+import plano
+from cliente_lol import FRAGMENTOS, ClienteLoL
+
 # Pasta dos dados (partidas, caches, configuração, modelo de voz). No .exe é a
 # pasta do executável; rodando o .py, é a pasta do script.
 def _pasta_dados() -> Path:
@@ -140,6 +143,25 @@ CONFIG = {
 
     # Ajuda na seleção de campeões (API local do cliente do LoL)
     "ajuda_selecao": True,
+    "aceitar_fila": True,
+    "importar_runas": True,
+    "importar_itens": True,
+    "importar_feiticos": False,
+
+    # Início da partida: plano de jogo e, se você for o caçador, a rota inicial
+    "plano_pre_partida": True,
+    "rota_selva": True,
+
+    # Diferença de ouro em itens entre os times (avisa ao mudar de faixa)
+    "avisar_diferenca_ouro": True,
+    "faixa_diferenca_ouro": 2000,
+
+    # Chat com IA (API do Claude). A chave fica no Gerenciador de Credenciais.
+    "modelo_ia": "claude-sonnet-5-5",
+    "plano_por_ia": False,       # plano pré-partida também pela IA (custa centavos)
+    "perfil_jogador": "Esmeralda IV no servidor BR; joga de caçador (Fiddlesticks) "
+                      "e suporte (Karma, Lulu, Seraphine, Morgana, Milio)",
+    "chave_api_reserva": "",
     "pasta_lol": r"C:\Riot Games\League of Legends",
 
     # Comandos de voz (reconhecimento offline com Vosk). Diga "coach" + comando:
@@ -272,7 +294,12 @@ def baixar_builds() -> str | None:
 
 def salvar_build_usuario(cid: str, build: dict):
     dados = _ler_json(ARQ_BUILDS_USUARIO)
-    dados[cid] = {k: build[k] for k in ("funcao", "runas", "itens", "ajustes") if k in build}
+    atual = BUILDS.get(cid, {})
+    dados[cid] = {k: build[k] for k in ("funcao", "runas", "itens", "ajustes", "pagina",
+                                        "feiticos") if k in build}
+    for k in ("pagina", "feiticos"):  # mantém a página de runas e feitiços que já existiam
+        if k not in dados[cid] and k in atual:
+            dados[cid][k] = atual[k]
     ARQ_BUILDS_USUARIO.write_text(json.dumps(dados, ensure_ascii=False, indent=2),
                                   encoding="utf-8")
     carregar_builds()
@@ -328,28 +355,40 @@ AJUSTES_ENCANTADOR = {
     "assassinos": ("assassino", ["Redemption", "Locket of the Iron Solari"]),
 }
 
+def pagina(primaria, runas, secundaria, runas2, fragmentos):
+    """Página de runas com nomes em inglês (Data Dragon) e fragmentos por apelido."""
+    return {"primaria": primaria, "runas": runas, "secundaria": secundaria,
+            "runas2": runas2, "fragmentos": fragmentos}
+
+
 BUILDS_PADRAO = {
-    "Fiddlesticks": {"funcao": "JUNGLE", "runas": "Eletrocutar",
+    "Fiddlesticks": {"pagina": pagina("Domination", ["Electrocute", "Cheap Shot", "Grisly Mementos", "Ultimate Hunter"], "Sorcery", ["Axiom Arcanist", "Transcendence"], ["adaptativo", "adaptativo", "vida_escalavel"]),
+        "feiticos": ["Flash", "Smite"], "funcao": "JUNGLE", "runas": "Eletrocutar",
                      "itens": ["Malignance", "Sorcerer's Shoes", "Liandry's Torment",
                                "Zhonya's Hourglass"],
                      "ajustes": "mago"},
-    "Karma": {"funcao": "UTILITY", "runas": "Aery",
+    "Karma": {"pagina": pagina("Sorcery", ["Summon Aery", "Manaflow Band", "Transcendence", "Gathering Storm"], "Resolve", ["Font of Life", "Revitalize"], ["aceleracao", "adaptativo", "vida"]),
+        "feiticos": ["Flash", "Heal"], "funcao": "UTILITY", "runas": "Aery",
               "itens": ["Ionian Boots of Lucidity", "Echoes of Helia", "Moonstone Renewer",
                         "Redemption"],
               "ajustes": "encantador"},
-    "Lulu": {"funcao": "UTILITY", "runas": "Aery",
+    "Lulu": {"pagina": pagina("Sorcery", ["Summon Aery", "Manaflow Band", "Transcendence", "Scorch"], "Resolve", ["Bone Plating", "Revitalize"], ["aceleracao", "adaptativo", "vida_escalavel"]),
+        "feiticos": ["Flash", "Heal"], "funcao": "UTILITY", "runas": "Aery",
              "itens": ["Ardent Censer", "Ionian Boots of Lucidity", "Mikael's Blessing",
                        "Moonstone Renewer"],
              "ajustes": "encantador"},
-    "Seraphine": {"funcao": "UTILITY", "runas": "Aery",
+    "Seraphine": {"pagina": pagina("Sorcery", ["Summon Aery", "Manaflow Band", "Transcendence", "Gathering Storm"], "Resolve", ["Font of Life", "Revitalize"], ["aceleracao", "adaptativo", "vida"]),
+        "feiticos": ["Flash", "Heal"], "funcao": "UTILITY", "runas": "Aery",
                   "itens": ["Echoes of Helia", "Ionian Boots of Lucidity", "Diadem of Songs",
                             "Moonstone Renewer"],
                   "ajustes": "encantador"},
-    "Morgana": {"funcao": "UTILITY", "runas": "Cometa Arcano",
+    "Morgana": {"pagina": pagina("Sorcery", ["Arcane Comet", "Manaflow Band", "Transcendence", "Scorch"], "Domination", ["Cheap Shot", "Ultimate Hunter"], ["adaptativo", "adaptativo", "vida_escalavel"]),
+        "feiticos": ["Flash", "Ignite"], "funcao": "UTILITY", "runas": "Cometa Arcano",
                 "itens": ["Blackfire Torch", "Ionian Boots of Lucidity", "Zhonya's Hourglass",
                           "Rylai's Crystal Scepter"],
                 "ajustes": "mago"},
-    "Milio": {"funcao": "UTILITY", "runas": "Aery",
+    "Milio": {"pagina": pagina("Sorcery", ["Summon Aery", "Manaflow Band", "Transcendence", "Scorch"], "Resolve", ["Bone Plating", "Revitalize"], ["aceleracao", "adaptativo", "vida_escalavel"]),
+        "feiticos": ["Flash", "Heal"], "funcao": "UTILITY", "runas": "Aery",
               "itens": ["Echoes of Helia", "Ionian Boots of Lucidity", "Moonstone Renewer",
                         "Ardent Censer"],
               "ajustes": "encantador"},
@@ -604,6 +643,44 @@ def carregar_itens() -> dict:
     return _com_cache(CACHE_ITENS, construir)
 
 
+CACHE_RUNAS = BASE / "runas_cache.json"
+FEITICOS = {"Flash": 4, "Smite": 11, "Heal": 7, "Ignite": 14, "Exhaust": 3,
+            "Barrier": 21, "Teleport": 12, "Cleanse": 1, "Ghost": 6}
+
+
+def carregar_runas() -> dict:
+    """{"arvores": {inglês: id}, "runas": {inglês: id}, "pt": {id: português}}."""
+    def construir(versao):
+        base = f"{DDRAGON}/cdn/{versao}/data"
+        en = requests.get(f"{base}/en_US/runesReforged.json", timeout=15).json()
+        pt = requests.get(f"{base}/pt_BR/runesReforged.json", timeout=15).json()
+        dados = {"arvores": {}, "runas": {}, "pt": {}}
+        for arvore in en:
+            dados["arvores"][arvore["name"]] = arvore["id"]
+            for slot in arvore["slots"]:
+                for r in slot["runes"]:
+                    dados["runas"][r["name"]] = r["id"]
+        for arvore in pt:
+            dados["pt"][str(arvore["id"])] = arvore["name"]
+            for slot in arvore["slots"]:
+                for r in slot["runes"]:
+                    dados["pt"][str(r["id"])] = r["name"]
+        return dados
+    return _com_cache(CACHE_RUNAS, construir)
+
+
+def ids_da_pagina(pagina: dict, runas: dict) -> tuple[int, int, list[int]] | None:
+    """Converte a página (nomes em inglês) para os ids que o cliente usa."""
+    try:
+        prim = runas["arvores"][pagina["primaria"]]
+        sec = runas["arvores"][pagina["secundaria"]]
+        perks = [runas["runas"][n] for n in pagina["runas"] + pagina["runas2"]]
+        perks += [FRAGMENTOS[f] for f in pagina["fragmentos"]]
+    except (KeyError, TypeError):
+        return None
+    return (prim, sec, perks) if len(perks) == 9 else None
+
+
 class Itens:
     """Consulta de itens: nome em português, preço e quanto falta para comprar."""
 
@@ -795,6 +872,9 @@ class Coach:
         self.build: dict | None = None                 # build do meu campeão
         self.avisos_item: set[str] = set()             # "perto_<id>" / "pronto_<id>" já falados
         self.resultado: str | None = None              # "Win" / "Lose" (evento GameEnd)
+        self.diferenca_ouro = 0                        # meu time - inimigo (itens)
+        self.faixa_ouro = 0
+        self.plano_texto: list[str] = []
 
     # -- helpers -----------------------------------------------------------
     def pode_avisar(self, chave: str, intervalo: float, agora: float) -> bool:
@@ -829,6 +909,7 @@ class Coach:
         self.identificar_cacadores(jogo)
         if CONFIG["analisar_composicao"]:
             self.falar_build(jogo)
+        self.falar_plano(jogo)
         if CONFIG["somente_antes_e_depois"]:
             self.voz.bloqueado = True
             print("(Modo antes e depois: sem avisos durante a partida. "
@@ -963,6 +1044,65 @@ class Coach:
             self.dica_build = " ".join(ajustes)
         self.texto_build = " ".join([f"Build: {lista}."] + ajustes)
 
+    # -- plano de jogo e rota da selva ---------------------------------------
+    def falar_plano(self, jogo: dict):
+        nomes = lambda cid: self.campeoes.get(cid, {}).get("name", cid)  # noqa: E731
+        frases = []
+        if CONFIG["plano_pre_partida"]:
+            frases = plano.montar_plano(jogo, self.eu, self.meu_time, self.campeoes,
+                                        id_campeao, ENGAJE, MUITO_CC, MERGULHO, nomes)
+        sou_cacador = (self.eu.get("position") == "JUNGLE"
+                       or (self.build or {}).get("funcao") == "JUNGLE"
+                       or any("smite" in (f.get("rawDisplayName", "") + f.get("displayName", ""))
+                              .lower() or "golpear" in f.get("displayName", "").lower()
+                              for f in self.eu.get("summonerSpells", {}).values()))
+        if CONFIG["rota_selva"] and sou_cacador:
+            frases.append(plano.rota_selva(jogo, self.meu_time, self.campeoes, id_campeao,
+                                           ENGAJE, MUITO_CC, nomes))
+        self.plano_texto = frases
+        for f in frases:
+            self.voz.falar(f)
+        if CONFIG["plano_por_ia"]:
+            threading.Thread(target=self._plano_ia, args=(jogo,), daemon=True).start()
+
+    def _plano_ia(self, jogo: dict):
+        import ia_chat  # importado aqui para evitar import circular
+        chave = ia_chat.obter_chave()
+        if not chave:
+            return
+        resumo = {"meu_time": [(p["championName"], p.get("position")) for p in jogo["allPlayers"]
+                               if p.get("team") == self.meu_time],
+                  "inimigos": [(p["championName"], p.get("position")) for p in jogo["allPlayers"]
+                               if p.get("team") != self.meu_time],
+                  "eu": (self.eu["championName"], self.eu.get("position"))}
+        try:
+            texto = ia_chat.plano_por_ia(resumo, chave, CONFIG["modelo_ia"])
+            if texto:
+                self.plano_texto.append(texto)
+                self.voz.falar("Plano da IA: " + texto, forcar=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"(Plano da IA indisponível: {e})")
+
+    # -- diferença de ouro entre os times ----------------------------------
+    def checar_diferenca_ouro(self, jogo: dict, t: float):
+        if not self.itens:
+            return
+        meu = sum(self.valor_itens(p) for p in jogo["allPlayers"] if p.get("team") == self.meu_time)
+        deles = sum(self.valor_itens(p) for p in jogo["allPlayers"] if p.get("team") != self.meu_time)
+        self.diferenca_ouro = meu - deles
+        if not CONFIG["avisar_diferenca_ouro"] or t < 5 * 60:
+            return
+        passo = CONFIG["faixa_diferenca_ouro"]
+        faixa = int(self.diferenca_ouro / passo)  # trunca em direção ao zero
+        if faixa != self.faixa_ouro and self.pode_avisar("ouro_times", 120, t):
+            self.faixa_ouro = faixa
+            valor = abs(round(self.diferenca_ouro, -2))
+            if faixa == 0:
+                self.voz.falar("Ouro em itens equilibrado entre os times.", t)
+            else:
+                lado = "à frente" if faixa > 0 else "atrás"
+                self.voz.falar(f"Seu time está cerca de {valor:.0f} de ouro {lado} em itens.", t)
+
     # -- ouro para o próximo item ------------------------------------------
     def checar_proximo_item(self, ativo: dict, t: float):
         if not CONFIG["avisar_proximo_item"] or not self.build or not self.itens:
@@ -1048,6 +1188,7 @@ class Coach:
         self.checar_nivel(ativo, t)
         self.checar_recompensa(jogo, t)
         self.checar_proximo_item(ativo, t)
+        self.checar_diferenca_ouro(jogo, t)
         self.checar_cs(t)
 
     def checar_eventos(self, jogo: dict, t: float):
@@ -1192,47 +1333,81 @@ def estatisticas_pool() -> dict[str, tuple[int, int]]:
 
 
 class SelecaoCampeoes:
-    """Lê a seleção de campeões e destaca o seu pool para a função.
+    """Lê a seleção de campeões: destaca o seu pool e importa runas e itens.
 
     Usa a API local do cliente (a mesma do lobby). A Riot diz que essa API não
     tem suporte oficial para apps de terceiros: funciona, mas pode mudar.
     """
 
-    def __init__(self, voz: Voz, campeoes: dict):
+    def __init__(self, voz: Voz, campeoes: dict, cliente: ClienteLoL | None = None,
+                 itens: "Itens | None" = None, runas: dict | None = None):
         self.voz = voz
         self.por_chave = {c["key"]: cid for cid, c in campeoes.items() if "key" in c}
         self.nomes = {cid: c["name"] for cid, c in campeoes.items()}
         self.campeoes = campeoes
-        self.sessao: requests.Session | None = None
-        self.base = ""
+        self.cliente = cliente or ClienteLoL(CONFIG["pasta_lol"])
+        self.itens = itens or Itens({})
+        self.runas = runas or {}
         self.reset()
 
     def reset(self):
         self.ativa = False
         self.inimigos_vistos: set[str] = set()
         self.notas_faladas: set[str] = set()
-
-    def _conectar(self) -> bool:
-        lockfile = Path(CONFIG["pasta_lol"]) / "lockfile"
-        try:
-            _, _, porta, senha, proto = lockfile.read_text().split(":")
-        except (OSError, ValueError):
-            return False
-        self.base = f"{proto}://127.0.0.1:{porta}"
-        self.sessao = requests.Session()
-        self.sessao.auth = ("riot", senha)
-        self.sessao.verify = False
-        return True
+        self.importado: str | None = None
 
     def ler(self) -> dict | None:
-        if not self.sessao and not self._conectar():
-            return None
-        try:
-            r = self.sessao.get(f"{self.base}/lol-champ-select/v1/session", timeout=1.5)
-        except requests.RequestException:
-            self.sessao = None  # cliente fechou ou reiniciou: reconecta depois
-            return None
-        return r.json() if r.status_code == 200 else None
+        self.cliente.pasta = Path(CONFIG["pasta_lol"])
+        return self.cliente.get("/lol-champ-select/v1/session")
+
+    # -- importação -----------------------------------------------------------
+    def importar(self, cid: str, eu: dict):
+        build = BUILDS.get(cid)
+        nome = self.nomes.get(cid, cid)
+        if not build:
+            print(f"(Sem build cadastrada para {nome}: nada importado.)")
+            return
+        feitos = []
+        if CONFIG["importar_runas"] and build.get("pagina") and self.runas:
+            ids = ids_da_pagina(build["pagina"], self.runas)
+            if ids:
+                res = self.cliente.importar_runas(*ids, nome=f"Coach LoL - {nome}")
+                if res.startswith("ok"):
+                    feitos.append("runas")
+                else:
+                    print(f"(Runas não importadas: {res}. Apague uma página no cliente.)")
+        if CONFIG["importar_itens"] and self.itens:
+            principal = [i for i in (self.itens.id(n) for n in build["itens"]) if i]
+            extras = []
+            for _, nomes in build["ajustes"].values():
+                for n in nomes:
+                    iid = self.itens.id(n)
+                    if iid and iid not in principal and iid not in extras:
+                        extras.append(iid)
+            chave = self.campeoes.get(cid, {}).get("key")
+            if chave and self.cliente.importar_itens(
+                    chave, nome, [("Build principal (Coach LoL)", principal),
+                                  ("Opções contra o time inimigo", extras),
+                                  ("Visão", ["2055"])]):
+                feitos.append("itens")
+        if CONFIG["importar_feiticos"] and build.get("feiticos"):
+            if self.trocar_feiticos(build["feiticos"], eu):
+                feitos.append("feitiços")
+        if feitos:
+            self.voz.falar(f"{', '.join(feitos).capitalize()} de {nome} importados.")
+
+    def trocar_feiticos(self, nomes: list[str], eu: dict) -> bool:
+        ids = [FEITICOS[n] for n in nomes if n in FEITICOS][:2]
+        if len(ids) != 2:
+            return False
+        # mantém o Flash na tecla em que você já costuma usar
+        if 4 in ids and eu.get("spell2Id") == 4:
+            ids = [i for i in ids if i != 4] + [4]
+        elif 4 in ids:
+            ids = [4] + [i for i in ids if i != 4]
+        r = self.cliente.pedir("PATCH", "/lol-champ-select/v1/session/my-selection",
+                               json={"spell1Id": ids[0], "spell2Id": ids[1]})
+        return r is not None and r.status_code in (200, 204)
 
     def processar(self, sessao: dict | None):
         if not sessao:
@@ -1246,13 +1421,19 @@ class SelecaoCampeoes:
         funcao = (eu.get("assignedPosition") or "").upper()
         if not self.ativa:
             self.ativa = True
-            self.falar_pool(funcao)
+            if CONFIG["ajuda_selecao"]:
+                self.falar_pool(funcao)
+        meu = self.por_chave.get(eu.get("championId"))
+        if meu and meu != self.importado:
+            self.importado = meu
+            self.importar(meu, eu)
         inimigos = {self.por_chave.get(p.get("championId"))
                     for p in sessao.get("theirTeam", []) if p.get("championId")}
         inimigos.discard(None)
         if inimigos - self.inimigos_vistos:
             self.inimigos_vistos |= inimigos
-            self.falar_notas(funcao)
+            if CONFIG["ajuda_selecao"]:
+                self.falar_notas(funcao)
 
     def falar_pool(self, funcao: str):
         pool = POOL.get(funcao)
@@ -1315,7 +1496,9 @@ def rodar(parar: threading.Event | None = None, voz: "Voz | None" = None,
     campeoes = carregar_campeoes()
     itens = Itens(carregar_itens())
     coach = Coach(voz, campeoes, itens)
-    selecao = SelecaoCampeoes(voz, campeoes) if campeoes else None
+    cliente = ClienteLoL(CONFIG["pasta_lol"])
+    selecao = (SelecaoCampeoes(voz, campeoes, cliente, itens, carregar_runas())
+               if campeoes else None)
     sessao = requests.Session()
     print("Coach LoL rodando. Aguardando partida...")
     estado("Aguardando partida")
@@ -1337,6 +1520,9 @@ def rodar(parar: threading.Event | None = None, voz: "Voz | None" = None,
                 coach.processar(jogo)
                 novo = (f"Em partida: {coach.eu['championName']}" if coach.eu
                         else "Em partida")
+                if coach.itens and abs(coach.diferenca_ouro) >= 100:
+                    d = coach.diferenca_ouro
+                    novo += f" · ouro {'+' if d > 0 else '−'}{abs(d) / 1000:.1f} mil".replace(".", ",")
             else:
                 falhas += 1
                 novo = "Aguardando partida"
@@ -1346,8 +1532,15 @@ def rodar(parar: threading.Event | None = None, voz: "Voz | None" = None,
                     print("Aguardando próxima partida...")
                 elif coach.em_partida:
                     novo = ultimo_estado
-                # fora da partida: acompanha a seleção de campeões
-                if selecao and CONFIG["ajuda_selecao"] and not coach.em_partida:
+                # fora da partida: aceita a fila e acompanha a seleção de campeões
+                if CONFIG["aceitar_fila"] and not coach.em_partida:
+                    cliente.pasta = Path(CONFIG["pasta_lol"])
+                    if cliente.aceitar_fila():
+                        print("Partida encontrada: aceita automaticamente.")
+                        novo = "Partida aceita"
+                usa_cliente = (CONFIG["ajuda_selecao"] or CONFIG["importar_runas"]
+                               or CONFIG["importar_itens"] or CONFIG["importar_feiticos"])
+                if selecao and usa_cliente and not coach.em_partida:
                     selecao.processar(selecao.ler())
                     if selecao.ativa:
                         novo = "Seleção de campeões"

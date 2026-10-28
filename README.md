@@ -12,9 +12,11 @@ O app avisa quando sai versão nova e se atualiza com um clique.
 
 ## O que ele faz
 
+- **Cliente do LoL:** aceita a fila sozinho e importa a página de runas e o conjunto de itens do campeão escolhido.
 - **Seleção de campeões:** seu histórico na função e notas sobre os campeões inimigos.
-- **Início da partida:** build do seu campeão e opções de itens contra a composição inimiga.
-- **Durante a partida** (opcional): ouro para o próximo item, CS/min, caçador inimigo visto em abates/objetivos, recompensas.
+- **Início da partida:** build, opções de itens contra a composição inimiga, plano de jogo (fase forte, iniciação, ameaças, sua rota) e, para o caçador, a rota inicial da selva.
+- **Durante a partida** (opcional): diferença de ouro dos times, ouro para o próximo item, CS/min, caçador inimigo visto em abates/objetivos, recompensas.
+- **Chat com IA** (opcional, com sua chave da API do Claude): perguntas sobre as suas partidas, com o histórico como contexto.
 - **Fim da partida:** resumo falado, alerta de sequência de derrotas e de jogo de madrugada.
 - **Relatório:** evolução de participação em abates, mortes antes dos 14 min, por campeão e por horário.
 - **Comandos de voz** (offline): "coach itens", "coach silêncio", "coach volta", "coach anota".

@@ -40,6 +40,7 @@ jobs:
           --hidden-import pyttsx3.drivers --hidden-import pyttsx3.drivers.sapi5
           --collect-submodules comtypes --collect-all vosk --collect-all sounddevice
           --collect-all customtkinter --hidden-import pystray._win32
+          --hidden-import keyring.backends.Windows
           coach_app.py
 
       - name: Inno Setup

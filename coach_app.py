@@ -20,6 +20,7 @@ import customtkinter as ctk
 
 import atualizacao
 import coach_lol as coach
+import ia_chat
 import registro
 import relatorio_lol as relatorio
 from versao import AVISO, VERSAO
@@ -43,13 +44,33 @@ TEXTO = ("#0b0b0b", "#eeedea")
 TEXTO2 = ("#52514e", "#a9a8a2")
 
 # Configurações com interruptor: (chave, título, descrição, invertido?)
+CLIENTE = [
+    ("aceitar_fila", "Aceitar a fila automaticamente",
+     "Aceita a partida assim que ela é encontrada.", False),
+    ("ajuda_selecao", "Ajuda na seleção de campeões",
+     "Seu histórico na função e notas sobre os inimigos.", False),
+    ("importar_runas", "Importar runas",
+     "Cria a página “Coach LoL” do campeão escolhido.", False),
+    ("importar_itens", "Importar itens",
+     "Cria o conjunto de itens “Coach LoL” que aparece na loja.", False),
+    ("importar_feiticos", "Trocar feitiços de invocador",
+     "Usa os feitiços da build (mantém o Flash na tecla de sempre).", False),
+]
+
+INICIO = [
+    ("analisar_composicao", "Build e ajustes no início",
+     "Fala a build e as opções contra o time inimigo.", False),
+    ("plano_pre_partida", "Plano de jogo",
+     "Fase forte, iniciação, ameaças e sua rota, na tela de carregamento.", False),
+    ("rota_selva", "Rota inicial da selva",
+     "Quando você for o caçador: por onde começar e onde terminar.", False),
+]
+
 FUNCOES = [
     ("somente_antes_e_depois", "Avisos durante a partida",
      "Desligado: só build no início e resumo no fim.", True),
-    ("analisar_composicao", "Build e ajustes no início",
-     "Fala a build e as opções contra o time inimigo.", False),
-    ("ajuda_selecao", "Ajuda na seleção de campeões",
-     "Seu histórico na função e notas sobre os inimigos.", False),
+    ("avisar_diferenca_ouro", "Diferença de ouro dos times",
+     "Pelos itens no placar, quando muda de faixa (2 mil).", False),
     ("avisar_cacador_inimigo", "Caçador inimigo",
      "Quando ele aparece em abates e objetivos.", False),
     ("avisar_recompensa", "Recompensa",
@@ -199,11 +220,12 @@ class App(ctk.CTk):
                                    command=self._trocou_aba)
         self.abas.pack(fill="both", expand=True, padx=12, pady=(0, 4))
         self._abas_widget = self.abas
-        for nome in ("Coach", "Builds", "Relatório", "Configurações"):
+        for nome in ("Coach", "Builds", "Relatório", "Chat", "Configurações"):
             self.abas.add(nome)
         self._aba_coach(self.abas.tab("Coach"))
         self._aba_builds(self.abas.tab("Builds"))
         self._aba_relatorio(self.abas.tab("Relatório"))
+        self._aba_chat(self.abas.tab("Chat"))
         self._aba_config(self.abas.tab("Configurações"))
 
     # ---- Coach ------------------------------------------------------------
@@ -390,6 +412,103 @@ class App(ctk.CTk):
         _, n = relatorio.gerar(self._dias(), abrir=True)
         self._escrever(f"Relatório aberto no navegador ({n} partidas).\n")
 
+    # ---- Chat ---------------------------------------------------------------
+    SUGESTOES = ["Por que estou perdendo?", "O que treinar esta semana?",
+                 "Analise minha última partida", "Qual campeão devo priorizar?"]
+
+    def _aba_chat(self, aba):
+        self.historico_chat: list[dict] = []
+        self.chat = ctk.CTkTextbox(aba, font=self.f_txt, fg_color=CARTAO, border_color=BORDA,
+                                   border_width=1, corner_radius=12, wrap="word")
+        self.chat.pack(fill="both", expand=True, padx=4, pady=(4, 8))
+        self.chat.tag_config("eu", foreground=AZUL[1])
+        self.chat.tag_config("ia_nome", foreground=OURO)
+        self.chat.tag_config("info", foreground=CINZA[1])
+        self.chat.configure(state="disabled")
+
+        chips = ctk.CTkFrame(aba, fg_color="transparent")
+        chips.pack(fill="x", padx=4)
+        for sug in self.SUGESTOES:
+            self._botao_secundario(chips, sug, lambda t=sug: self._enviar_chat(t),
+                                   20).pack(side="left", padx=(0, 6), pady=(0, 6))
+
+        linha = ctk.CTkFrame(aba, fg_color="transparent")
+        linha.pack(fill="x", padx=4, pady=(0, 4))
+        self.chat_entrada = ctk.CTkEntry(linha, placeholder_text="Pergunte sobre suas partidas...",
+                                         border_color=BORDA, height=38)
+        self.chat_entrada.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.chat_entrada.bind("<Return>", lambda e: self._enviar_chat())
+        self.chat_bt = ctk.CTkButton(linha, text="Enviar", width=90, height=38, fg_color=AZUL,
+                                     hover_color=AZUL_HOVER, command=self._enviar_chat)
+        self.chat_bt.pack(side="left")
+        self._chat_escrever("O coach responde com base nas partidas que ele registrou, no seu "
+                            "pool e nas builds. Configure a chave da API em Configurações → "
+                            "Chat com IA.\n\n", "info")
+
+    def _chat_escrever(self, texto, tag=None):
+        self.chat.configure(state="normal")
+        self.chat.insert("end", texto, tag)
+        self.chat.see("end")
+        self.chat.configure(state="disabled")
+
+    def _enviar_chat(self, texto=None):
+        texto = (texto or self.chat_entrada.get()).strip()
+        if not texto or str(self.chat_bt.cget("state")) == "disabled":
+            return
+        chave = ia_chat.obter_chave()
+        if not chave:
+            self._chat_escrever("Configure a chave da API em Configurações → Chat com IA.\n\n",
+                                "info")
+            return
+        self.chat_entrada.delete(0, "end")
+        self._chat_escrever("Você: ", "eu")
+        self._chat_escrever(texto + "\n\n")
+        self._chat_escrever("Coach: ", "ia_nome")
+        self._chat_escrever("pensando...", "info")
+        self.chat_bt.configure(state="disabled", text="...")
+        historico = list(self.historico_chat)
+
+        def trabalho():
+            try:
+                resp = ia_chat.perguntar(historico, texto, chave, coach.CONFIG["modelo_ia"])
+                self.fila.put(("chat", (texto, resp, None)))
+            except Exception as e:  # noqa: BLE001
+                registro.erro("Falha no chat", e)
+                self.fila.put(("chat", (texto, None, str(e))))
+        threading.Thread(target=trabalho, daemon=True).start()
+
+    def _resposta_chat(self, pergunta, resposta, erro):
+        self.chat.configure(state="normal")
+        inicio = self.chat._textbox.search("pensando...", "end-1c", backwards=True)
+        if inicio:
+            self.chat.delete(inicio, f"{inicio}+11c")
+        self.chat.configure(state="disabled")
+        if erro:
+            self._chat_escrever(erro + "\n\n", "info")
+        else:
+            self._chat_escrever(resposta + "\n\n")
+            self.historico_chat += [{"role": "user", "content": pergunta},
+                                    {"role": "assistant", "content": resposta}]
+        self.chat_bt.configure(state="normal", text="Enviar")
+
+    def _salvar_chave(self):
+        chave = self.chave_var.get().strip()
+        if not chave.startswith("sk-"):
+            self.chave_status.configure(text="Isso não parece uma chave da API (começa com sk-ant-).")
+            return
+        onde = ia_chat.salvar_chave(chave)
+        self.chave_var.set("")
+        self._atualizar_status_chave(f"Chave salva no {onde}.")
+
+    def _remover_chave(self):
+        ia_chat.salvar_chave(None)
+        self._atualizar_status_chave("Chave removida.")
+
+    def _atualizar_status_chave(self, msg=None):
+        tem = bool(ia_chat.obter_chave())
+        self.chave_status.configure(text=msg or ("Chave configurada." if tem else
+                                                 "Nenhuma chave configurada."))
+
     # ---- Configurações ----------------------------------------------------
     def _aba_config(self, aba):
         rolagem = ctk.CTkScrollableFrame(aba, fg_color="transparent")
@@ -425,7 +544,17 @@ class App(ctk.CTk):
                     coach.CONFIG["comandos_de_voz"],
                     lambda v: coach.salvar_config({"comandos_de_voz": v}))
 
-        func = secao("Funções")
+        def grupo(titulo, lista):
+            c = secao(titulo)
+            for chave, tit, desc, inv in lista:
+                valor = (not coach.CONFIG[chave]) if inv else coach.CONFIG[chave]
+                interruptor(c, tit, desc, valor,
+                            lambda v, k=chave, i=inv: coach.salvar_config({k: (not v) if i else v}))
+
+        grupo("Cliente do LoL (fila e seleção)", CLIENTE)
+        grupo("Início da partida", INICIO)
+
+        func = secao("Durante a partida")
         for chave, titulo, desc, inv in FUNCOES:
             valor = (not coach.CONFIG[chave]) if inv else coach.CONFIG[chave]
             interruptor(func, titulo, desc, valor,
@@ -449,6 +578,44 @@ class App(ctk.CTk):
                     "Busca as builds do patch novo ao abrir o app. Suas edições são mantidas.",
                     coach.CONFIG["builds_automaticas"],
                     lambda v: coach.salvar_config({"builds_automaticas": v}))
+
+        ia = secao("Chat com IA")
+        linha = ctk.CTkFrame(ia, fg_color="transparent")
+        linha.pack(fill="x", padx=16, pady=(12, 4))
+        ctk.CTkLabel(linha, text="Chave da API do Claude", font=self.f_txt).pack(anchor="w")
+        ctk.CTkLabel(linha, text="Crie em console.anthropic.com → API Keys. Cada pergunta custa "
+                     "centavos de dólar. A chave fica no Gerenciador de Credenciais do Windows.",
+                     font=self.f_peq, text_color=TEXTO2, wraplength=600,
+                     justify="left").pack(anchor="w")
+        linha = ctk.CTkFrame(ia, fg_color="transparent")
+        linha.pack(fill="x", padx=16, pady=(4, 8))
+        self.chave_var = ctk.StringVar(value="")
+        self.chave_entry = ctk.CTkEntry(linha, textvariable=self.chave_var, show="•",
+                                        border_color=BORDA,
+                                        placeholder_text="sk-ant-..." )
+        self.chave_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ctk.CTkButton(linha, text="Salvar", width=80, fg_color=AZUL, hover_color=AZUL_HOVER,
+                      command=self._salvar_chave).pack(side="left")
+        self._botao_secundario(linha, "Remover", self._remover_chave, 80).pack(
+            side="left", padx=(6, 0))
+        self.chave_status = ctk.CTkLabel(ia, text="", font=self.f_peq, text_color=TEXTO2)
+        self.chave_status.pack(anchor="w", padx=16)
+        linha = ctk.CTkFrame(ia, fg_color="transparent")
+        linha.pack(fill="x", padx=16, pady=(6, 4))
+        ctk.CTkLabel(linha, text="Modelo", font=self.f_txt).pack(side="left")
+        inv_m = {v: k for k, v in ia_chat.MODELOS.items()}
+        self.modelo = ctk.CTkOptionMenu(linha, values=list(ia_chat.MODELOS), fg_color=AZUL,
+                                        button_color=AZUL_HOVER, width=220,
+                                        command=lambda v: coach.salvar_config(
+                                            {"modelo_ia": ia_chat.MODELOS[v]}))
+        self.modelo.set(inv_m.get(coach.CONFIG["modelo_ia"], list(ia_chat.MODELOS)[0]))
+        self.modelo.pack(side="right")
+        interruptor(ia, "Plano pré-partida pela IA",
+                    "Além do plano automático, a IA fala um plano de 3 frases (custa centavos "
+                    "por partida).", coach.CONFIG["plano_por_ia"],
+                    lambda v: coach.salvar_config({"plano_por_ia": v}))
+        ctk.CTkFrame(ia, fg_color="transparent", height=6).pack()
+        self._atualizar_status_chave()
 
         pasta = secao("Pasta do League of Legends")
         linha = ctk.CTkFrame(pasta, fg_color="transparent")
@@ -673,6 +840,8 @@ class App(ctk.CTk):
                     self._preencher_builds()
                 elif tipo == "builds":
                     self._preencher_builds()
+                elif tipo == "chat":
+                    self._resposta_chat(*valor)
                 elif tipo == "atualizacao":
                     self._mostrar_faixa(valor)
                 elif tipo == "progresso":

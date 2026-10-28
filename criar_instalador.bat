@@ -5,7 +5,7 @@ echo.
 echo === Criando o instalador do Coach LoL ===
 echo.
 echo [1/4] Instalando as ferramentas do Python...
-python -m pip install --upgrade pyinstaller requests pyttsx3 vosk sounddevice customtkinter pystray pillow
+python -m pip install --upgrade pyinstaller requests pyttsx3 vosk sounddevice customtkinter pystray pillow keyring
 if errorlevel 1 goto erro
 
 echo.
@@ -18,6 +18,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed --name CoachLoL ^
   --hidden-import pyttsx3.drivers --hidden-import pyttsx3.drivers.sapi5 ^
   --collect-submodules comtypes --collect-all vosk --collect-all sounddevice ^
   --collect-all customtkinter --hidden-import pystray._win32 ^
+  --hidden-import keyring.backends.Windows ^
   coach_app.py
 if errorlevel 1 goto erro
 
