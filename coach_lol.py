@@ -721,6 +721,28 @@ def carregar_campeoes() -> dict:
 
 
 CACHE_ITENS = BASE / "itens_cache.json"
+PASTA_ICONES = BASE / "icones"
+
+
+def baixar_icone(cid: str) -> Path | None:
+    """Ícone quadrado do campeão (Data Dragon), guardado em cache local."""
+    arq = PASTA_ICONES / f"{cid}.png"
+    if arq.exists():
+        return arq
+    try:
+        try:
+            versao = json.loads(CACHE_CAMPEOES.read_text(encoding="utf-8"))["versao"]
+        except (OSError, ValueError, KeyError):
+            versao = _versao_ddragon()
+        r = requests.get(f"{DDRAGON}/cdn/{versao}/img/champion/{cid}.png", timeout=10)
+        r.raise_for_status()
+        PASTA_ICONES.mkdir(parents=True, exist_ok=True)
+        tmp = arq.with_suffix(".tmp")
+        tmp.write_bytes(r.content)
+        tmp.replace(arq)
+        return arq
+    except (requests.RequestException, OSError):
+        return None
 
 
 def carregar_itens() -> dict:

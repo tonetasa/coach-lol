@@ -117,6 +117,71 @@ def iniciar_com_windows(ligar: bool) -> bool:
     return True
 
 
+class Icones:
+    """Ícones dos campeões: baixa em segundo plano e entrega CTkImage arredondada."""
+
+    def __init__(self, fila: queue.Queue):
+        from concurrent.futures import ThreadPoolExecutor
+        self.fila = fila
+        self.cache: dict[tuple[str, int], ctk.CTkImage] = {}
+        self.pendentes: dict[str, list] = {}
+        self.pool = ThreadPoolExecutor(max_workers=8)
+        self.trava = threading.Lock()
+
+    def _carregar(self, cid: str, tamanho: int):
+        from PIL import Image, ImageDraw
+        arq = coach.PASTA_ICONES / f"{cid}.png"
+        img = Image.open(arq).convert("RGBA").resize((tamanho * 2, tamanho * 2), Image.LANCZOS)
+        mascara = Image.new("L", img.size, 0)
+        ImageDraw.Draw(mascara).rounded_rectangle((0, 0, *img.size), radius=tamanho // 3, fill=255)
+        img.putalpha(mascara)
+        return ctk.CTkImage(light_image=img, dark_image=img, size=(tamanho, tamanho))
+
+    def vazio(self, tamanho: int):
+        """Quadrado cinza do tamanho do ícone, enquanto ele baixa."""
+        chave = ("", tamanho)
+        if chave not in self.cache:
+            from PIL import Image, ImageDraw
+            img = Image.new("RGBA", (tamanho * 2, tamanho * 2), (0, 0, 0, 0))
+            ImageDraw.Draw(img).rounded_rectangle((0, 0, *img.size), radius=tamanho // 3,
+                                                  fill=(46, 47, 52, 255))
+            self.cache[chave] = ctk.CTkImage(light_image=img, dark_image=img,
+                                             size=(tamanho, tamanho))
+        return self.cache[chave]
+
+    def obter(self, cid: str, tamanho: int, ao_carregar=None):
+        """CTkImage se o ícone já está no PC; senão baixa e chama ao_carregar() depois."""
+        chave = (cid, tamanho)
+        if chave in self.cache:
+            return self.cache[chave]
+        if (coach.PASTA_ICONES / f"{cid}.png").exists():
+            try:
+                self.cache[chave] = self._carregar(cid, tamanho)
+                return self.cache[chave]
+            except Exception:  # noqa: BLE001 (arquivo corrompido: baixa de novo)
+                (coach.PASTA_ICONES / f"{cid}.png").unlink(missing_ok=True)
+        with self.trava:
+            ja_baixando = cid in self.pendentes
+            self.pendentes.setdefault(cid, [])
+            if ao_carregar:
+                self.pendentes[cid].append(ao_carregar)
+        if not ja_baixando:
+            self.pool.submit(self._baixar, cid)
+        return None
+
+    def _baixar(self, cid: str):
+        coach.baixar_icone(cid)
+        with self.trava:
+            chamadas = self.pendentes.pop(cid, [])
+        if chamadas:
+            self.fila.put(("icone", chamadas))
+
+    def pre_carregar(self, cids):
+        for cid in cids:
+            if not (coach.PASTA_ICONES / f"{cid}.png").exists():
+                self.obter(cid, 48)
+
+
 class SaidaParaFila:
     """Substitui o print: manda o texto para a janela."""
 
@@ -148,6 +213,7 @@ class App(ctk.CTk):
         self.bandeja = None
         self.itens = coach.Itens({})
         self.campeoes: dict = {}
+        self.icones = Icones(self.fila)
 
         self.migrados = coach.migrar_dados_antigos() if getattr(sys, "frozen", False) else 0
         registro.configurar(coach.BASE, VERSAO)
@@ -316,6 +382,7 @@ class App(ctk.CTk):
                 card.pack(fill="x", padx=2, pady=4)
                 topo = ctk.CTkFrame(card, fg_color="transparent")
                 topo.pack(fill="x", padx=16, pady=(10, 2))
+                self._icone_label(topo, cid, 30).pack(side="left", padx=(0, 10))
                 ctk.CTkLabel(topo, text=self._nome_campeao(cid), font=self.f_sub).pack(side="left")
                 ctk.CTkLabel(topo, text=f"   {nomes_funcao.get(b['funcao'], b['funcao'])} · "
                              f"runa {b['runas']}", font=self.f_peq,
@@ -354,6 +421,21 @@ class App(ctk.CTk):
                         f"{quote('Build: ' + nome)}&body={quote(corpo)}")
         self._escrever(f"Abrindo o pedido de build para {nome} no GitHub "
                        "(precisa estar logado). A build chega na próxima atualização semanal.\n")
+
+    def _icone_label(self, pai, cid, tamanho):
+        """Label com o ícone do campeão (aparece assim que terminar de baixar)."""
+        rotulo = ctk.CTkLabel(pai, text="", width=tamanho, height=tamanho,
+                              fg_color=BORDA, corner_radius=tamanho // 3)
+
+        def pronto():
+            img = self.icones.obter(cid, tamanho)
+            if img and rotulo.winfo_exists():
+                rotulo.configure(image=img, fg_color="transparent")
+
+        img = self.icones.obter(cid, tamanho, ao_carregar=pronto)
+        if img:
+            rotulo.configure(image=img, fg_color="transparent")
+        return rotulo
 
     def _nome_campeao(self, cid):
         return self.campeoes.get(cid, {}).get("name", cid)
@@ -909,8 +991,15 @@ class App(ctk.CTk):
                 elif tipo == "itens":
                     self.itens = coach.Itens(valor)
                     self._preencher_builds()
+                elif tipo == "icone":
+                    for chamada in valor:
+                        try:
+                            chamada()
+                        except Exception:  # noqa: BLE001 (janela já fechada)
+                            pass
                 elif tipo == "campeoes":
                     self.campeoes = valor
+                    self.icones.pre_carregar(coach.todos_do_pool())
                     self._preencher_builds()
                     if self.precisa_perfil and valor:
                         self.precisa_perfil = False
@@ -991,6 +1080,64 @@ class App(ctk.CTk):
                 self.bandeja.stop()
             except Exception:  # noqa: BLE001
                 pass
+        self.destroy()
+
+
+class SeletorCampeao(ctk.CTkToplevel):
+    """Grade com os ícones de todos os campeões e busca por nome."""
+
+    COLUNAS = 7
+
+    def __init__(self, pai, app: App, ao_escolher, excluir=(), titulo="Escolher campeão"):
+        super().__init__(pai, fg_color=FUNDO)
+        self.app, self.ao_escolher = app, ao_escolher
+        self.title(titulo)
+        self.geometry("640x600")
+        self.transient(pai)
+        self.after(100, self.grab_set)
+        self.busca = ctk.CTkEntry(self, placeholder_text="Buscar campeão...", height=36,
+                                  border_color=BORDA)
+        self.busca.pack(fill="x", padx=16, pady=(16, 8))
+        self.busca.bind("<KeyRelease>", lambda e: self._filtrar())
+        self.after(150, self.busca.focus_set)
+        self.grade = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.grade.pack(fill="both", expand=True, padx=10, pady=(0, 12))
+        for c in range(self.COLUNAS):
+            self.grade.grid_columnconfigure(c, weight=1)
+        lista = sorted(((c["name"], cid) for cid, c in app.campeoes.items()
+                        if cid not in excluir), key=lambda x: x[0].lower())
+        app.icones.pre_carregar(cid for _, cid in lista)
+        self.celulas = []
+        for nome, cid in lista:
+            bt = ctk.CTkButton(self.grade, text=nome if len(nome) <= 11 else nome[:10] + "…",
+                               width=80, height=86, compound="top", fg_color="transparent",
+                               hover_color=BORDA, text_color=TEXTO, font=app.f_peq,
+                               image=app.icones.obter(cid, 52) or app.icones.vazio(52),
+                               command=lambda cid=cid: self._escolher(cid))
+            self.celulas.append((nome.lower(), cid, bt))
+            self._pendente(cid, bt)
+        self._filtrar()
+
+    def _pendente(self, cid, bt):
+        if not (coach.PASTA_ICONES / f"{cid}.png").exists():
+            def pronto():
+                img = self.app.icones.obter(cid, 52)
+                if img and bt.winfo_exists():
+                    bt.configure(image=img)
+            self.app.icones.obter(cid, 52, ao_carregar=pronto)
+
+    def _filtrar(self):
+        texto = self.busca.get().strip().lower()
+        i = 0
+        for nome, _, bt in self.celulas:
+            if texto in nome:
+                bt.grid(row=i // self.COLUNAS, column=i % self.COLUNAS, padx=2, pady=2)
+                i += 1
+            else:
+                bt.grid_forget()
+
+    def _escolher(self, cid):
+        self.ao_escolher(cid)
         self.destroy()
 
 
@@ -1104,24 +1251,53 @@ class EditorPerfil(ctk.CTkToplevel):
         for f in sel:
             card = self.app._cartao(self.area_pool)
             card.pack(fill="x", pady=4)
-            ctk.CTkLabel(card, text=self.NOMES[f], font=self.app.f_sub).pack(
-                anchor="w", padx=14, pady=(8, 4))
-            chips = ctk.CTkFrame(card, fg_color="transparent")
-            chips.pack(fill="x", padx=14)
-            for cid in self.pool.get(f, []):
-                nome = self.app.campeoes.get(cid, {}).get("name", cid)
-                ctk.CTkButton(chips, text=f"{nome}  ✕", width=20, height=26, fg_color=BORDA,
-                              hover_color=CINZA, text_color=TEXTO,
-                              command=lambda f=f, c=cid: self._remover(f, c)).pack(
-                    side="left", padx=(0, 6), pady=2)
-            linha = ctk.CTkFrame(card, fg_color="transparent")
-            linha.pack(fill="x", padx=14, pady=(4, 10))
-            cb = ctk.CTkComboBox(linha, values=self.nomes_campeoes, border_color=BORDA, width=240)
-            cb.set("")
-            cb.pack(side="left", padx=(0, 8))
-            cb.bind("<KeyRelease>", lambda e, c=cb: EditorBuild._filtrar(c, self.nomes_campeoes))
-            ctk.CTkButton(linha, text="Adicionar", width=90, fg_color=AZUL, hover_color=AZUL_HOVER,
-                          command=lambda f=f, c=cb: self._adicionar(f, c.get())).pack(side="left")
+            cab = ctk.CTkFrame(card, fg_color="transparent")
+            cab.pack(fill="x", padx=14, pady=(8, 2))
+            ctk.CTkLabel(cab, text=self.NOMES[f], font=self.app.f_sub).pack(side="left")
+            if self.pool.get(f):
+                ctk.CTkLabel(cab, text="clique num campeão para remover", font=self.app.f_peq,
+                             text_color=CINZA).pack(side="right")
+            grade = ctk.CTkFrame(card, fg_color="transparent")
+            grade.pack(fill="x", padx=12, pady=(0, 10))
+            por_linha = 6
+            lista = self.pool.get(f, [])
+            for i, cid in enumerate(lista):
+                self._bloco_campeao(grade, f, cid).grid(row=i // por_linha, column=i % por_linha,
+                                                        padx=2, pady=2)
+            if len(lista) < self.MAX_POOL:
+                n = len(lista)
+                ctk.CTkButton(grade, text="+", width=60, height=60, corner_radius=14,
+                              font=ctk.CTkFont(size=26), fg_color="transparent",
+                              border_width=2, border_color=BORDA, hover_color=BORDA,
+                              text_color=TEXTO2,
+                              command=lambda f=f: SeletorCampeao(
+                                  self, self.app, lambda cid, f=f: self._adicionar_id(f, cid),
+                                  excluir=set(self.pool.get(f, [])),
+                                  titulo=f"Adicionar campeão: {self.NOMES[f]}")).grid(
+                    row=n // por_linha, column=n % por_linha, padx=9, pady=(6, 4), sticky="n")
+
+    def _bloco_campeao(self, pai, funcao, cid):
+        """Ícone + nome; clicar remove do pool (o fundo fica vermelho ao passar o mouse)."""
+        nome = self.app.campeoes.get(cid, {}).get("name", cid)
+        bt = ctk.CTkButton(pai, text=nome if len(nome) <= 10 else nome[:9] + "…",
+                           image=self.app.icones.obter(cid, 60) or self.app.icones.vazio(60),
+                           compound="top", width=78, height=88, fg_color="transparent",
+                           hover_color=("#f3d2cf", "#4a2422"), text_color=TEXTO,
+                           font=self.app.f_peq, command=lambda: self._remover(funcao, cid))
+        if not (coach.PASTA_ICONES / f"{cid}.png").exists():
+            def pronto():
+                img = self.app.icones.obter(cid, 60)
+                if img and bt.winfo_exists():
+                    bt.configure(image=img)
+            self.app.icones.obter(cid, 60, ao_carregar=pronto)
+        return bt
+
+    def _adicionar_id(self, funcao, cid):
+        lista = self.pool.setdefault(funcao, [])
+        if cid not in lista and len(lista) < self.MAX_POOL:
+            lista.append(cid)
+        self.erro.configure(text="")
+        self._montar_pools()
 
     def _adicionar(self, funcao, nome):
         cid = self.por_nome.get(nome.strip())
