@@ -21,7 +21,6 @@ import customtkinter as ctk
 import atualizacao
 import coach_lol as coach
 import funcoes_comuns
-import ia_chat
 import registro
 import relatorio_lol as relatorio
 from versao import AVISO, VERSAO
@@ -253,6 +252,9 @@ class App(ctk.CTk):
         self.builds_abertas: set[str] = set()
 
         self.migrados = coach.migrar_dados_antigos() if getattr(sys, "frozen", False) else 0
+        if not coach.CONFIG.get("chave_ia_apagada"):
+            threading.Thread(target=coach.apagar_chave_ia_antiga, daemon=True).start()
+            coach.salvar_config({"chave_ia_apagada": True})
         registro.configurar(coach.BASE, VERSAO)
         ja_usava = coach.CONFIG_ARQ.exists()   # quem já usava antes do perfil existir
         coach.carregar_config()
@@ -335,12 +337,11 @@ class App(ctk.CTk):
                                    command=self._trocou_aba)
         self.abas.pack(fill="both", expand=True, padx=12, pady=(0, 4))
         self._abas_widget = self.abas
-        for nome in ("Coach", "Builds", "Relatório", "Chat", "Configurações"):
+        for nome in ("Coach", "Builds", "Relatório", "Configurações"):
             self.abas.add(nome)
         self._aba_coach(self.abas.tab("Coach"))
         self._aba_builds(self.abas.tab("Builds"))
         self._aba_relatorio(self.abas.tab("Relatório"))
-        self._aba_chat(self.abas.tab("Chat"))
         self._aba_config(self.abas.tab("Configurações"))
 
     # ---- Coach ------------------------------------------------------------
@@ -670,103 +671,6 @@ class App(ctk.CTk):
         _, n = relatorio.gerar(self._dias(), abrir=True)
         self._escrever(f"Relatório aberto no navegador ({n} partidas).\n")
 
-    # ---- Chat ---------------------------------------------------------------
-    SUGESTOES = ["Por que estou perdendo?", "O que treinar esta semana?",
-                 "Analise minha última partida", "Qual campeão devo priorizar?"]
-
-    def _aba_chat(self, aba):
-        self.historico_chat: list[dict] = []
-        self.chat = ctk.CTkTextbox(aba, font=self.f_txt, fg_color=CARTAO, border_color=BORDA,
-                                   border_width=1, corner_radius=12, wrap="word")
-        self.chat.pack(fill="both", expand=True, padx=4, pady=(4, 8))
-        self.chat.tag_config("eu", foreground=AZUL[1])
-        self.chat.tag_config("ia_nome", foreground=OURO)
-        self.chat.tag_config("info", foreground=CINZA[1])
-        self.chat.configure(state="disabled")
-
-        chips = ctk.CTkFrame(aba, fg_color="transparent")
-        chips.pack(fill="x", padx=4)
-        for sug in self.SUGESTOES:
-            self._botao_secundario(chips, sug, lambda t=sug: self._enviar_chat(t),
-                                   20).pack(side="left", padx=(0, 6), pady=(0, 6))
-
-        linha = ctk.CTkFrame(aba, fg_color="transparent")
-        linha.pack(fill="x", padx=4, pady=(0, 4))
-        self.chat_entrada = ctk.CTkEntry(linha, placeholder_text="Pergunte sobre suas partidas...",
-                                         border_color=BORDA, height=38)
-        self.chat_entrada.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self.chat_entrada.bind("<Return>", lambda e: self._enviar_chat())
-        self.chat_bt = ctk.CTkButton(linha, text="Enviar", width=90, height=38, fg_color=AZUL,
-                                     hover_color=AZUL_HOVER, command=self._enviar_chat)
-        self.chat_bt.pack(side="left")
-        self._chat_escrever("O coach responde com base nas partidas que ele registrou, no seu "
-                            "pool e nas builds. Configure a chave da API em Configurações → "
-                            "Chat com IA.\n\n", "info")
-
-    def _chat_escrever(self, texto, tag=None):
-        self.chat.configure(state="normal")
-        self.chat.insert("end", texto, tag)
-        self.chat.see("end")
-        self.chat.configure(state="disabled")
-
-    def _enviar_chat(self, texto=None):
-        texto = (texto or self.chat_entrada.get()).strip()
-        if not texto or str(self.chat_bt.cget("state")) == "disabled":
-            return
-        chave = ia_chat.obter_chave()
-        if not chave:
-            self._chat_escrever("Configure a chave da API em Configurações → Chat com IA.\n\n",
-                                "info")
-            return
-        self.chat_entrada.delete(0, "end")
-        self._chat_escrever("Você: ", "eu")
-        self._chat_escrever(texto + "\n\n")
-        self._chat_escrever("Coach: ", "ia_nome")
-        self._chat_escrever("pensando...", "info")
-        self.chat_bt.configure(state="disabled", text="...")
-        historico = list(self.historico_chat)
-
-        def trabalho():
-            try:
-                resp = ia_chat.perguntar(historico, texto, chave, coach.CONFIG["modelo_ia"])
-                self.fila.put(("chat", (texto, resp, None)))
-            except Exception as e:  # noqa: BLE001
-                registro.erro("Falha no chat", e)
-                self.fila.put(("chat", (texto, None, str(e))))
-        threading.Thread(target=trabalho, daemon=True).start()
-
-    def _resposta_chat(self, pergunta, resposta, erro):
-        self.chat.configure(state="normal")
-        inicio = self.chat._textbox.search("pensando...", "end-1c", backwards=True)
-        if inicio:
-            self.chat.delete(inicio, f"{inicio}+11c")
-        self.chat.configure(state="disabled")
-        if erro:
-            self._chat_escrever(erro + "\n\n", "info")
-        else:
-            self._chat_escrever(resposta + "\n\n")
-            self.historico_chat += [{"role": "user", "content": pergunta},
-                                    {"role": "assistant", "content": resposta}]
-        self.chat_bt.configure(state="normal", text="Enviar")
-
-    def _salvar_chave(self):
-        chave = self.chave_var.get().strip()
-        if not chave.startswith("sk-"):
-            self.chave_status.configure(text="Isso não parece uma chave da API (começa com sk-ant-).")
-            return
-        onde = ia_chat.salvar_chave(chave)
-        self.chave_var.set("")
-        self._atualizar_status_chave(f"Chave salva no {onde}.")
-
-    def _remover_chave(self):
-        ia_chat.salvar_chave(None)
-        self._atualizar_status_chave("Chave removida.")
-
-    def _atualizar_status_chave(self, msg=None):
-        tem = bool(ia_chat.obter_chave())
-        self.chave_status.configure(text=msg or ("Chave configurada." if tem else
-                                                 "Nenhuma chave configurada."))
-
     # ---- Configurações ----------------------------------------------------
     def _aba_config(self, aba):
         rolagem = ctk.CTkScrollableFrame(aba, fg_color="transparent")
@@ -804,12 +708,18 @@ class App(ctk.CTk):
                       hover_color=AZUL_HOVER, command=lambda: EditorPerfil(self)).pack(side="right")
 
         voz = secao("Voz")
-        interruptor(voz, "Falar os avisos", "Usa a voz do Windows.",
+        interruptor(voz, "Falar os avisos", "Usa uma voz instalada no Windows.",
                     coach.CONFIG["voz_ligada"], self._mudar_voz)
-        interruptor(voz, "Comandos de voz",
-                    "“coach itens”, “coach silêncio”, “coach volta”, “coach anota”.",
-                    coach.CONFIG["comandos_de_voz"],
-                    lambda v: coach.salvar_config({"comandos_de_voz": v}))
+        self._linha_voz_windows(voz)
+        sw = interruptor(voz, "Comandos de voz", "", coach.CONFIG["comandos_de_voz"],
+                         lambda v: coach.salvar_config({"comandos_de_voz": v}))
+        txt = sw.master.winfo_children()[0]
+        self.chamada_desc = ctk.CTkLabel(txt, text="", font=self.f_peq, text_color=TEXTO2,
+                                         justify="left", wraplength=440)
+        self.chamada_desc.pack(anchor="w")
+        self._botao_secundario(sw.master, "Palavra de chamada",
+                               lambda: EditorChamada(self), 150).pack(side="right", padx=(0, 12))
+        self._atualizar_chamada()
         interruptor(voz, "Microfone só durante a partida",
                     "Recomendado: microfone aberto deixa fones Bluetooth no modo “telefone” "
                     "e abaixa o som de outros apps (Spotify, Discord).",
@@ -866,43 +776,6 @@ class App(ctk.CTk):
                     coach.CONFIG["builds_automaticas"],
                     lambda v: coach.salvar_config({"builds_automaticas": v}))
 
-        ia = secao("Chat com IA")
-        linha = ctk.CTkFrame(ia, fg_color="transparent")
-        linha.pack(fill="x", padx=16, pady=(12, 4))
-        ctk.CTkLabel(linha, text="Chave da API do Claude", font=self.f_txt).pack(anchor="w")
-        ctk.CTkLabel(linha, text="Crie em console.anthropic.com → API Keys. Cada pergunta custa "
-                     "centavos de dólar. A chave fica no Gerenciador de Credenciais do Windows.",
-                     font=self.f_peq, text_color=TEXTO2, wraplength=600,
-                     justify="left").pack(anchor="w")
-        linha = ctk.CTkFrame(ia, fg_color="transparent")
-        linha.pack(fill="x", padx=16, pady=(4, 8))
-        self.chave_var = ctk.StringVar(value="")
-        self.chave_entry = ctk.CTkEntry(linha, textvariable=self.chave_var, show="•",
-                                        border_color=BORDA,
-                                        placeholder_text="sk-ant-..." )
-        self.chave_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        ctk.CTkButton(linha, text="Salvar", width=80, fg_color=AZUL, hover_color=AZUL_HOVER,
-                      command=self._salvar_chave).pack(side="left")
-        self._botao_secundario(linha, "Remover", self._remover_chave, 80).pack(
-            side="left", padx=(6, 0))
-        self.chave_status = ctk.CTkLabel(ia, text="", font=self.f_peq, text_color=TEXTO2)
-        self.chave_status.pack(anchor="w", padx=16)
-        linha = ctk.CTkFrame(ia, fg_color="transparent")
-        linha.pack(fill="x", padx=16, pady=(6, 4))
-        ctk.CTkLabel(linha, text="Modelo", font=self.f_txt).pack(side="left")
-        inv_m = {v: k for k, v in ia_chat.MODELOS.items()}
-        self.modelo = ctk.CTkOptionMenu(linha, values=list(ia_chat.MODELOS), fg_color=AZUL,
-                                        button_color=AZUL_HOVER, width=220,
-                                        command=lambda v: coach.salvar_config(
-                                            {"modelo_ia": ia_chat.MODELOS[v]}))
-        self.modelo.set(inv_m.get(coach.CONFIG["modelo_ia"], list(ia_chat.MODELOS)[0]))
-        self.modelo.pack(side="right")
-        interruptor(ia, "Plano pré-partida pela IA",
-                    "Além do plano automático, a IA fala um plano de 3 frases (custa centavos "
-                    "por partida).", coach.CONFIG["plano_por_ia"],
-                    lambda v: coach.salvar_config({"plano_por_ia": v}))
-        ctk.CTkFrame(ia, fg_color="transparent", height=6).pack()
-        self._atualizar_status_chave()
 
         pasta = secao("Pasta do League of Legends")
         linha = ctk.CTkFrame(pasta, fg_color="transparent")
@@ -1023,6 +896,47 @@ class App(ctk.CTk):
         self.clipboard_append(registro.diagnostico(VERSAO, coach.BASE))
         self._escrever("Diagnóstico copiado. Cole na conversa com o Claude.\n")
 
+    def _atualizar_chamada(self):
+        self.chamada_desc.configure(text="Diga " + coach.exemplos_chamada() + ".")
+
+    def _linha_voz_windows(self, pai):
+        linha = ctk.CTkFrame(pai, fg_color="transparent")
+        linha.pack(fill="x", padx=16, pady=7)
+        txt = ctk.CTkFrame(linha, fg_color="transparent")
+        txt.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(txt, text="Voz do Quíron", font=self.f_txt).pack(anchor="w")
+        ctk.CTkLabel(txt, text="Para ter mais vozes, instale em Configurações do Windows → "
+                     "Hora e idioma → Fala.", font=self.f_peq, text_color=TEXTO2,
+                     wraplength=300, justify="left").pack(anchor="w")
+        self._bt_testar_voz = ctk.CTkButton(linha, text="Ouvir", width=70, fg_color=AZUL,
+                                            hover_color=AZUL_HOVER, command=self._testar_voz)
+        self._bt_testar_voz.pack(side="right")
+        velocidades = {"Lenta": 150, "Normal": 185, "Rápida": 220}
+        vel = ctk.CTkOptionMenu(linha, values=list(velocidades), width=95, fg_color=AZUL,
+                                button_color=AZUL_HOVER, command=lambda v: coach.salvar_config(
+                                    {"velocidade_voz": velocidades[v]}))
+        atual = coach.CONFIG.get("velocidade_voz", 185)
+        vel.set(min(velocidades, key=lambda k: abs(velocidades[k] - atual)))
+        vel.pack(side="right", padx=8)
+        vozes = coach.listar_vozes()
+        self._vozes = {"Automática (português)": ""} | {n: i for n, i in vozes}
+        menu = ctk.CTkOptionMenu(linha, values=list(self._vozes), width=220,
+                                 dynamic_resizing=False, fg_color=AZUL, button_color=AZUL_HOVER,
+                                 command=lambda v: coach.salvar_config(
+                                     {"voz_windows": self._vozes[v]}))
+        inv = {i: n for n, i in self._vozes.items()}
+        menu.set(inv.get(coach.CONFIG.get("voz_windows", ""), "Automática (português)"))
+        menu.pack(side="right")
+
+    def _testar_voz(self):
+        frase = f"Olá! Eu sou o Quíron. Diga {coach.CONFIG.get('palavra_chamada', 'Quíron')} itens para ouvir a build."
+        voz = self.voz
+        if voz is None or not voz.ativa:
+            if getattr(self, "_voz_teste", None) is None:
+                self._voz_teste = coach.Voz(ativa=True)
+            voz = self._voz_teste
+        voz.fila.put(frase)
+
     def _mudar_voz(self, ligada):
         coach.salvar_config({"voz_ligada": ligada})
         if self.voz:
@@ -1099,7 +1013,7 @@ class App(ctk.CTk):
             "Parado": "Inicie o coach e deixe o app aberto enquanto joga.",
             "Carregando dados dos campeões...": "Baixando dados do patch atual.",
         }
-        padrao = ("Diga “coach silêncio” para pausar os avisos."
+        padrao = (f"Diga “{coach.CONFIG.get('palavra_chamada', 'Quíron')} silêncio” para pausar os avisos."
                   if coach.CONFIG["comandos_de_voz"] else "Os avisos aparecem abaixo.")
         self.estado.configure(text=texto)
         self.ponto.configure(text_color=cor)
@@ -1142,8 +1056,6 @@ class App(ctk.CTk):
                         self.after(300, lambda: EditorPerfil(self, primeira_vez=True))
                 elif tipo == "builds":
                     self._preencher_builds()
-                elif tipo == "chat":
-                    self._resposta_chat(*valor)
                 elif tipo == "atualizacao":
                     self._mostrar_faixa(valor)
                 elif tipo == "progresso":
@@ -1318,9 +1230,6 @@ class EditorPerfil(ctk.CTkToplevel):
 
     SERVIDORES = ["BR", "LAN", "LAS", "NA", "EUW", "EUNE", "KR", "JP", "OCE", "TR", "RU",
                   "ME", "SEA", "TW", "VN"]
-    TIERS = ["Sem ranque", "Ferro", "Bronze", "Prata", "Ouro", "Platina", "Esmeralda",
-             "Diamante", "Mestre", "Grão-Mestre", "Desafiante"]
-    DIVISOES = ["IV", "III", "II", "I"]
     NOMES = {"TOP": "Topo", "JUNGLE": "Caçador", "MIDDLE": "Meio", "BOTTOM": "Atirador",
              "UTILITY": "Suporte"}
     MAX_POOL = 6
@@ -1345,7 +1254,7 @@ class EditorPerfil(ctk.CTkToplevel):
             ctk.CTkLabel(corpo, text="Vamos configurar o seu coach", font=app.f_titulo).pack(
                 anchor="w", pady=(0, 2))
             ctk.CTkLabel(corpo, text="O Quíron usa isso para sugerir campeões no draft, "
-                         "importar builds e personalizar o chat. Dá para mudar depois em "
+                         "importar builds e montar o plano da partida. Dá para mudar depois em "
                          "Configurações → Perfil.", font=app.f_txt, text_color=TEXTO2,
                          wraplength=560, justify="left").pack(anchor="w", pady=(0, 10))
 
@@ -1360,24 +1269,35 @@ class EditorPerfil(ctk.CTkToplevel):
         if atual["riot_id"]:
             self.riot.insert(0, atual["riot_id"])
         self.riot.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self.servidor = ctk.CTkOptionMenu(linha, values=self.SERVIDORES, width=90,
+        self.riot.bind("<Return>", lambda e: self._buscar())
+        self.bt_buscar = ctk.CTkButton(linha, text="Buscar", width=90, fg_color=AZUL,
+                                       hover_color=AZUL_HOVER, command=self._buscar)
+        self.bt_buscar.pack(side="left", padx=(0, 8))
+        self.servidor = ctk.CTkOptionMenu(linha, values=self.SERVIDORES, width=80,
                                           fg_color=AZUL, button_color=AZUL_HOVER)
         self.servidor.set(atual["servidor"] or "BR")
         self.servidor.pack(side="left")
 
-        rotulo("Elo atual")
-        linha = ctk.CTkFrame(corpo, fg_color="transparent")
-        linha.pack(fill="x")
-        tier, div = (atual["elo"].split(" ") + [""])[:2] if atual["elo"] else ("Sem ranque", "")
-        self.tier = ctk.CTkOptionMenu(linha, values=self.TIERS, fg_color=AZUL,
-                                      button_color=AZUL_HOVER, command=lambda _: self._div_estado())
-        self.tier.set(tier if tier in self.TIERS else "Sem ranque")
-        self.tier.pack(side="left", padx=(0, 8))
-        self.div = ctk.CTkOptionMenu(linha, values=self.DIVISOES, width=80, fg_color=AZUL,
-                                     button_color=AZUL_HOVER)
-        self.div.set(div if div in self.DIVISOES else "IV")
-        self.div.pack(side="left")
-        self._div_estado()
+        # Resultado da busca: ícone, nível e elo (vem do cliente, não se escolhe)
+        self.elo = atual["elo"]
+        self.card_inv = app._cartao(corpo)
+        self.card_inv.pack(fill="x", pady=(10, 0))
+        self.inv_icone = ctk.CTkLabel(self.card_inv, text="", width=56, height=56)
+        self.inv_icone.pack(side="left", padx=(12, 10), pady=10)
+        info = ctk.CTkFrame(self.card_inv, fg_color="transparent")
+        info.pack(side="left", fill="x", expand=True, pady=10)
+        self.inv_nome = ctk.CTkLabel(info, text="", font=app.f_sub, anchor="w")
+        self.inv_nome.pack(anchor="w")
+        self.inv_elo = ctk.CTkLabel(info, text="", font=app.f_txt, text_color=TEXTO2,
+                                    anchor="w", justify="left", wraplength=440)
+        self.inv_elo.pack(anchor="w")
+        self.sugestao = ctk.CTkFrame(corpo, fg_color="transparent", height=1)
+        self.sugestao.pack(fill="x")
+        self._mostrar_invocador(None, atual["riot_id"])
+        self.cliente = coach.ClienteLoL(coach.CONFIG["pasta_lol"])
+        self.resultado: queue.Queue = queue.Queue()
+        # com o cliente aberto, já busca (a conta logada, se o Riot ID estiver vazio)
+        self.after(300, lambda: self._buscar(proprio=not atual["riot_id"], silencioso=True))
 
         rotulo("Funções que você joga")
         linha = ctk.CTkFrame(corpo, fg_color="transparent")
@@ -1406,9 +1326,134 @@ class EditorPerfil(ctk.CTkToplevel):
                                  font=app.f_peq)
         self.erro.pack(side="left")
 
-    def _div_estado(self):
-        sem_div = self.tier.get() in ("Sem ranque", "Mestre", "Grão-Mestre", "Desafiante")
-        self.div.configure(state="disabled" if sem_div else "normal")
+    # ---- busca do invocador (pelo cliente do LoL) ----------------------------
+    def _mostrar_invocador(self, dados, riot_id=""):
+        if dados is None:
+            self.inv_icone.configure(image=self.app.icones.vazio(56))
+            self.inv_nome.configure(text=riot_id or "Nenhum invocador")
+            if self.elo:
+                self.inv_elo.configure(text=f"Elo: {self.elo}  ·  clique em Buscar para atualizar")
+            else:
+                self.inv_elo.configure(text="Digite o Riot ID e clique em Buscar (com o cliente "
+                                            "do LoL aberto). O elo é preenchido sozinho.")
+            return
+        icone = str(dados.get("icone") or "")
+        if icone:
+            img = self.app.icones.imagem("perfil", icone, 56,
+                                         lambda: self._mostrar_icone(icone), raio=12)
+            self.inv_icone.configure(image=img or self.app.icones.vazio(56))
+        nivel = f"  ·  nível {dados['nivel']}" if dados.get("nivel") else ""
+        self.inv_nome.configure(text=dados["riot_id"] + nivel)
+        if dados["elo"]:
+            jogos = dados["vitorias"] + dados["derrotas"]
+            taxa = f"  ·  {round(100 * dados['vitorias'] / jogos)}% de vitórias em {jogos} jogos" \
+                if jogos else ""
+            pdl = f"  ·  {dados['pdl']} PDL" if dados.get("pdl") is not None else ""
+            self.inv_elo.configure(text=f"Solo/Duo: {dados['elo']}{pdl}{taxa}")
+        else:
+            self.inv_elo.configure(text="Solo/Duo: sem ranque nesta temporada")
+
+    def _mostrar_icone(self, icone):
+        img = self.app.icones.imagem("perfil", icone, 56, raio=12)
+        if img and self.winfo_exists():
+            self.inv_icone.configure(image=img)
+
+    def _buscar(self, proprio: bool = False, silencioso: bool = False):
+        if str(self.bt_buscar.cget("state")) == "disabled":
+            return
+        self.silencioso = silencioso
+        riot = self.riot.get().strip()
+        if not proprio and "#" not in riot:
+            self.erro.configure(text="O Riot ID tem o formato Nome#TAG.")
+            return
+        self.erro.configure(text="")
+        self.bt_buscar.configure(state="disabled", text="...")
+
+        def trabalho():
+            try:
+                if proprio:
+                    eu = self.cliente.eu()
+                    if not eu or not eu["riot_id"]:
+                        self.resultado.put(("silencio", None))
+                        return
+                    self.resultado.put(("riot", eu))
+                    dados = self.cliente.buscar_invocador(eu["riot_id"])
+                else:
+                    dados = self.cliente.buscar_invocador(riot)
+                    eu = self.cliente.eu()
+                    if eu and eu.get("regiao"):
+                        dados["regiao"] = eu["regiao"]
+                self.resultado.put(("dados", dados))
+            except Exception as e:  # noqa: BLE001
+                registro.erro("Falha ao buscar invocador", e)
+                self.resultado.put(("dados", {"erro": "Não consegui buscar agora. Tente de novo."}))
+
+        threading.Thread(target=trabalho, daemon=True).start()
+        self.after(150, self._esperar_busca)
+
+    def _esperar_busca(self):
+        if not self.winfo_exists():
+            return
+        try:
+            tipo, valor = self.resultado.get_nowait()
+        except queue.Empty:
+            self.after(150, self._esperar_busca)
+            return
+        if tipo == "riot":
+            self.riot.delete(0, "end")
+            self.riot.insert(0, valor["riot_id"])
+            if valor.get("regiao") in self.SERVIDORES:
+                self.servidor.set(valor["regiao"])
+            self.after(150, self._esperar_busca)
+            return
+        self.bt_buscar.configure(state="normal", text="Buscar")
+        if tipo == "silencio":
+            return
+        if valor.get("erro"):
+            if not self.silencioso:
+                self.erro.configure(text=valor["erro"])
+            return
+        self.elo = valor["elo"]
+        self.riot.delete(0, "end")
+        self.riot.insert(0, valor["riot_id"])
+        if valor.get("regiao") in self.SERVIDORES:
+            self.servidor.set(valor["regiao"])
+        self._mostrar_invocador(valor)
+        self._sugerir_pelo_historico(valor)
+
+    def _sugerir_pelo_historico(self, dados):
+        """Mostra funções e campeões mais jogados e oferece usar no perfil."""
+        for w in self.sugestao.winfo_children():
+            w.destroy()
+        total = dados.get("partidas_lidas", 0)
+        if not total:
+            return
+        por_chave = {c["key"]: k for k, c in self.app.campeoes.items()}
+        # funções com pelo menos 15% das partidas (no máximo 3)
+        funcoes = [f for f, n in dados["funcoes"].most_common(3) if n / total >= 0.15]
+        pool = {f: [por_chave[k] for k, _ in dados["campeoes"][f].most_common(self.MAX_POOL)
+                    if k in por_chave] for f in funcoes}
+        partes = [f"{self.NOMES[f]} {round(100 * n / total)}%"
+                  for f, n in dados["funcoes"].most_common() if n / total >= 0.05]
+        texto = f"Nas últimas {total} partidas: " + ", ".join(partes)
+        if not self._selecionadas():
+            self._aplicar(funcoes, pool)
+            texto += ". Preenchi as funções e campeões; ajuste se quiser."
+            ctk.CTkLabel(self.sugestao, text=texto, font=self.app.f_peq, text_color=TEXTO2,
+                         wraplength=560, justify="left").pack(anchor="w", pady=(6, 0))
+            return
+        linha = ctk.CTkFrame(self.sugestao, fg_color="transparent")
+        linha.pack(fill="x", pady=(6, 0))
+        ctk.CTkLabel(linha, text=texto, font=self.app.f_peq, text_color=TEXTO2,
+                     wraplength=400, justify="left").pack(side="left")
+        self.app._botao_secundario(linha, "Usar no perfil",
+                                   lambda: self._aplicar(funcoes, pool), 120).pack(side="right")
+
+    def _aplicar(self, funcoes, pool):
+        for f, cb in self.funcoes.items():
+            cb.select() if f in funcoes else cb.deselect()
+        self.pool.update({f: c for f, c in pool.items() if c})
+        self._montar_pools()
 
     def _selecionadas(self):
         return [f for f in coach.FUNCOES if self.funcoes[f].get()]
@@ -1508,14 +1553,132 @@ class EditorPerfil(ctk.CTkToplevel):
         if riot and "#" not in riot:
             self.erro.configure(text="O Riot ID tem o formato Nome#TAG.")
             return
-        tier = self.tier.get()
-        elo = "" if tier == "Sem ranque" else (
-            tier if tier in ("Mestre", "Grão-Mestre", "Desafiante") else f"{tier} {self.div.get()}")
         coach.salvar_config({"perfil": {"riot_id": riot, "servidor": self.servidor.get(),
-                                        "elo": elo, "funcoes": funcoes, "pool": pool}})
+                                        "elo": self.elo, "funcoes": funcoes, "pool": pool}})
         self.app.perfil_txt.configure(text=coach.texto_perfil())
         self.app._preencher_builds()
         self.app._escrever("Perfil salvo.\n")
+        self.destroy()
+
+
+class EditorChamada(ctk.CTkToplevel):
+    """Escolhe a palavra que chama o Quíron nos comandos de voz."""
+
+    def __init__(self, app: App):
+        super().__init__(app, fg_color=FUNDO)
+        self.app = app
+        self.title("Palavra de chamada")
+        self.geometry("520x400")
+        self.resizable(False, False)
+        self.transient(app)
+        self.after(100, self.grab_set)
+        self.fila: queue.Queue = queue.Queue()
+        corpo = ctk.CTkFrame(self, fg_color="transparent")
+        corpo.pack(fill="both", expand=True, padx=20, pady=16)
+        ctk.CTkLabel(corpo, text="Como você quer chamar o Quíron?", font=app.f_sub).pack(anchor="w")
+        ctk.CTkLabel(corpo, text="Você fala essa palavra antes do comando. Ela precisa existir no "
+                     "dicionário do reconhecimento de voz (que funciona sem internet).",
+                     font=app.f_peq, text_color=TEXTO2, wraplength=470,
+                     justify="left").pack(anchor="w", pady=(2, 10))
+        linha = ctk.CTkFrame(corpo, fg_color="transparent")
+        linha.pack(fill="x")
+        self.var = ctk.StringVar(value=coach.CONFIG.get("palavra_chamada", "Quíron"))
+        self.entrada = ctk.CTkEntry(linha, textvariable=self.var, border_color=BORDA)
+        self.entrada.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        app._botao_secundario(linha, "Voltar para Quíron",
+                              lambda: self.var.set("Quíron"), 150).pack(side="left")
+        self.estado = ctk.CTkLabel(corpo, text="", font=app.f_txt, wraplength=470,
+                                   justify="left", anchor="w")
+        self.estado.pack(fill="x", pady=(10, 4))
+        self.chips = ctk.CTkFrame(corpo, fg_color="transparent", height=1)
+        self.chips.pack(fill="x")
+        self.teste = ctk.CTkLabel(corpo, text="", font=app.f_peq, text_color=TEXTO2,
+                                  wraplength=470, justify="left", anchor="w")
+        self.teste.pack(fill="x", pady=(12, 4))
+        self.bt_teste = app._botao_secundario(corpo, "Testar no microfone (5 s)", self._testar, 200)
+        self.bt_teste.pack(anchor="w")
+
+        bts = ctk.CTkFrame(self, fg_color="transparent")
+        bts.pack(fill="x", padx=20, pady=12)
+        self.bt_salvar = ctk.CTkButton(bts, text="Salvar", fg_color=AZUL, hover_color=AZUL_HOVER,
+                                       command=self._salvar)
+        self.bt_salvar.pack(side="right")
+        app._botao_secundario(bts, "Cancelar", self.destroy, 100).pack(side="right", padx=8)
+        self.var.trace_add("write", lambda *_: self._validar())
+        self.entrada.bind("<Return>", lambda e: self._salvar())
+        self._validar()
+
+    def _validar(self):
+        for w in self.chips.winfo_children():
+            w.destroy()
+        nome = self.var.get().strip()
+        if not coach.vocabulario():
+            self.estado.configure(text="O modelo de voz ainda não foi baixado (ele baixa ao ligar "
+                                  "o coach com os comandos de voz). Dá para salvar mesmo assim.",
+                                  text_color=TEXTO2)
+            self.bt_salvar.configure(state="normal" if nome else "disabled")
+            return True
+        if not nome:
+            self.estado.configure(text="Digite uma palavra.", text_color=TEXTO2)
+            self.bt_salvar.configure(state="disabled")
+            return False
+        if coach.formas_chamada(nome):
+            self.estado.configure(text="✓ Reconhecida. Diga " + coach.exemplos_chamada(nome) + ".",
+                                  text_color=("#1f8a4c", "#4cc38a"))
+            self.bt_salvar.configure(state="normal")
+            return True
+        self.estado.configure(text=f"✗ “{nome}” não está no dicionário de voz. Palavras parecidas:",
+                              text_color=("#c4372f", "#f0706a"))
+        self.bt_salvar.configure(state="disabled")
+        for sug in coach.sugestoes_chamada(nome):
+            self.app._botao_secundario(self.chips, sug, lambda t=sug: self.var.set(t.capitalize()),
+                                       0).pack(side="left", padx=(0, 6), pady=2)
+        return False
+
+    def _testar(self):
+        nome = self.var.get().strip()
+        if not self._validar() or str(self.bt_teste.cget("state")) == "disabled":
+            return
+        self.bt_teste.configure(state="disabled")
+        self.teste.configure(text=f"Fale agora: “{nome} itens”...")
+
+        def trabalho():
+            try:
+                self.fila.put(coach.testar_chamada(nome))
+            except Exception as e:  # noqa: BLE001
+                registro.erro("Falha no teste da palavra de chamada", e)
+                self.fila.put(("", f"erro: {e}"))
+
+        threading.Thread(target=trabalho, daemon=True).start()
+        self.after(200, self._esperar)
+
+    def _esperar(self):
+        if not self.winfo_exists():
+            return
+        try:
+            texto, acao = self.fila.get_nowait()
+        except queue.Empty:
+            self.after(200, self._esperar)
+            return
+        self.bt_teste.configure(state="normal")
+        nomes = {"build": "itens", "silencio": "silêncio", "volta": "volta", "anota": "anota"}
+        if acao and acao.startswith("erro"):
+            self.teste.configure(text=f"Não consegui usar o microfone ({acao[6:]}).")
+        elif acao:
+            self.teste.configure(text=f"✓ Entendi o comando “{nomes[acao]}”. Funcionando!")
+        elif texto:
+            self.teste.configure(text=f"Ouvi “{texto}”, mas não reconheci o comando. Tente falar "
+                                 "mais perto do microfone ou escolha outra palavra.")
+        else:
+            self.teste.configure(text="Não ouvi nada. Confira o microfone em Configurações → Voz.")
+
+    def _salvar(self):
+        if not self._validar():
+            return
+        coach.salvar_config({"palavra_chamada": self.var.get().strip()})
+        self.app._atualizar_chamada()
+        self.app._escrever(f"Palavra de chamada: {self.var.get().strip()}. "
+                           "Vale a partir da próxima partida.\n")
         self.destroy()
 
 

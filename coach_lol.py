@@ -21,7 +21,8 @@ Uso:
     python coach_lol.py --sem-voz       # só texto no terminal
     python coach_lol.py --sem-microfone # sem comandos de voz
 
-Comandos de voz: "coach itens", "coach silêncio", "coach volta", "coach anota".
+Comandos de voz: "Quíron itens", "Quíron silêncio", "Quíron volta", "Quíron anota"
+(a palavra de chamada pode ser trocada nas configurações).
 
 Também faz: ajuda na seleção de campeões (seu histórico por função e notas
 sobre o time inimigo), aviso de ouro para o próximo item, CS/min baixo, e,
@@ -160,26 +161,41 @@ CONFIG = {
     "avisar_diferenca_ouro": True,
     "faixa_diferenca_ouro": 2000,
 
-    # Chat com IA (API do Claude). A chave fica no Gerenciador de Credenciais.
-    "modelo_ia": "claude-sonnet-5-5",
-    "plano_por_ia": False,       # plano pré-partida também pela IA (custa centavos)
     # Perfil do jogador (preenchido no primeiro uso do app)
     "perfil": {},
-    "chave_api_reserva": "",
     "pasta_lol": r"C:\Riot Games\League of Legends",
 
-    # Comandos de voz (reconhecimento offline com Vosk). Diga "coach" + comando:
-    #   "coach itens"    -> repete a build e os ajustes contra o time inimigo
-    #   "coach silêncio" -> para de falar por alguns minutos
-    #   "coach volta"    -> volta a falar
-    #   "coach anota"    -> marca o momento para revisar no resumo da partida
+    # Voz do Windows usada nos avisos (vazio = primeira voz em português)
+    "voz_windows": "",
+    "velocidade_voz": 185,
+
+    # Comandos de voz (reconhecimento offline com Vosk). Diga a palavra de
+    # chamada + comando, por exemplo "Quíron itens":
+    #   itens    -> repete a build e os ajustes contra o time inimigo
+    #   silêncio -> para de falar por alguns minutos
+    #   volta    -> volta a falar
+    #   anota    -> marca o momento para revisar no resumo da partida
     "comandos_de_voz": True,
+    "palavra_chamada": "Quíron",
     "microfone": "",                  # vazio = padrão do Windows
     "microfone_so_na_partida": True,  # fecha o microfone fora da partida
     "minutos_silencio": 3,
 }
 
 CONFIG_ARQ = BASE / "config_coach.json"
+
+
+def apagar_chave_ia_antiga():
+    """O chat com IA foi removido: apaga a chave da API guardada, se existir."""
+    try:
+        import keyring
+        for servico in ("Quiron", "CoachLoL"):
+            try:
+                keyring.delete_password(servico, "anthropic")
+            except Exception:  # noqa: BLE001 (não havia chave)
+                pass
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def migrar_dados_antigos() -> int:
@@ -329,12 +345,121 @@ def exportar_builds_padrao() -> dict:
 
 URL_MODELO_VOZ = "https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip"
 PASTA_MODELO_VOZ = BASE / "modelo_voz"
-FRASES_COMANDO = {
-    "coach itens": "build", "coach repete os itens": "build",
-    "coach silêncio": "silencio", "coach cala a boca": "silencio",
-    "coach volta": "volta", "coach pode falar": "volta",
-    "coach anota": "anota", "coach marca": "anota",
+COMANDOS = {
+    "itens": "build", "repete os itens": "build",
+    "silêncio": "silencio", "cala a boca": "silencio",
+    "volta": "volta", "pode falar": "volta",
+    "anota": "anota", "marca": "anota",
 }
+# O dicionário do modelo de voz não tem "quíron". Estas sequências de palavras
+# que ele conhece soam igual ("qui-rom") e são aceitas como a palavra de chamada.
+VARIANTES_CHAMADA = {"quíron": ["qui rom", "quiroga", "quirino", "qui ron"],
+                     "quiron": ["qui rom", "quiroga", "quirino", "qui ron"]}
+_VOCABULARIO: set[str] | None = None
+
+
+def vocabulario() -> set[str]:
+    """Palavras que o modelo de voz conhece (lidas da tabela dentro do Gr.fst)."""
+    global _VOCABULARIO
+    if _VOCABULARIO is not None:
+        return _VOCABULARIO
+    import struct
+    palavras: set[str] = set()
+    try:
+        pasta = next(p for p in PASTA_MODELO_VOZ.iterdir() if p.is_dir())
+        dados = (pasta / "Gr.fst").read_bytes()
+        # tabela de símbolos do OpenFst: magia, nome, chave livre, tamanho, entradas
+        i = dados.index(b"\x74\xfb\xb2\x7e") + 4
+        n = struct.unpack_from("<i", dados, i)[0]
+        i += 4 + n
+        _, tamanho = struct.unpack_from("<qq", dados, i)
+        i += 16
+        for _ in range(tamanho):
+            n = struct.unpack_from("<i", dados, i)[0]
+            palavras.add(dados[i + 4:i + 4 + n].decode("utf-8", "replace"))
+            i += 4 + n + 8
+    except (StopIteration, OSError, ValueError, struct.error):
+        return set()  # modelo ainda não baixado: não guarda, tenta de novo depois
+    _VOCABULARIO = palavras
+    return palavras
+
+
+def formas_chamada(nome: str) -> list[str]:
+    """Como a palavra de chamada aparece no reconhecimento (só palavras conhecidas)."""
+    nome = " ".join(nome.lower().split())
+    voc = vocabulario()
+    formas = []
+    if nome and voc and all(p in voc for p in nome.split()):
+        formas.append(nome)
+    for v in VARIANTES_CHAMADA.get(nome, []):
+        if not voc or all(p in voc for p in v.split()):
+            formas.append(v)
+    return formas
+
+
+def sugestoes_chamada(nome: str, n: int = 6) -> list[str]:
+    import difflib
+    voc = [p for p in vocabulario() if len(p) >= 4 and p.isalpha()]
+    return difflib.get_close_matches(nome.lower().strip(), voc, n=n, cutoff=0.6)
+
+
+def frases_comando(nome: str | None = None) -> dict[str, str]:
+    nome = nome if nome is not None else CONFIG.get("palavra_chamada", "Quíron")
+    return {f"{forma} {cmd}": acao for forma in formas_chamada(nome)
+            for cmd, acao in COMANDOS.items()}
+
+
+def achar_comando(texto: str, frases: dict[str, str]) -> str | None:
+    """Comando no texto reconhecido (ignora ruído antes, como "[unk]")."""
+    texto = " ".join(p for p in texto.split() if p != "[unk]")
+    for frase, acao in sorted(frases.items(), key=lambda x: -len(x[0])):
+        if texto == frase or texto.endswith(" " + frase):
+            return acao
+    return None
+
+
+def exemplos_chamada(nome: str | None = None) -> str:
+    nome = (nome if nome is not None else CONFIG.get("palavra_chamada", "Quíron")).strip()
+    return ", ".join(f"“{nome} {c}”" for c in ("itens", "silêncio", "volta", "anota"))
+
+
+def garantir_modelo_voz() -> bool:
+    if PASTA_MODELO_VOZ.exists() and any(PASTA_MODELO_VOZ.iterdir()):
+        return True
+    import io
+    import urllib.request
+    import zipfile
+    print("Baixando modelo de voz em português (~30 MB, só na primeira vez)...")
+    try:
+        with urllib.request.urlopen(URL_MODELO_VOZ, timeout=120) as r:
+            dados = r.read()
+        with zipfile.ZipFile(io.BytesIO(dados)) as z:
+            z.extractall(PASTA_MODELO_VOZ)
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"(Não consegui baixar o modelo de voz: {e}. Comandos de voz desligados.)")
+        return False
+
+
+def testar_chamada(nome: str, segundos: float = 5.0) -> tuple[str, str | None]:
+    """Escuta o microfone por alguns segundos. Retorna (texto ouvido, comando)."""
+    import sounddevice as sd
+    import vosk
+    if not garantir_modelo_voz():
+        raise RuntimeError("modelo de voz indisponível")
+    vosk.SetLogLevel(-1)
+    frases = frases_comando(nome)
+    if not frases:
+        raise ValueError("palavra fora do dicionário de voz")
+    pasta = next(p for p in PASTA_MODELO_VOZ.iterdir() if p.is_dir())
+    rec = vosk.KaldiRecognizer(vosk.Model(str(pasta)), 16000,
+                               json.dumps(list(frases) + ["[unk]"], ensure_ascii=False))
+    gravado = sd.rec(int(segundos * 16000), samplerate=16000, channels=1, dtype="int16",
+                     device=CONFIG.get("microfone") or None)
+    sd.wait()
+    rec.AcceptWaveform(gravado.tobytes())
+    texto = json.loads(rec.FinalResult()).get("text", "").strip()
+    return texto, achar_comando(texto, frases)
 
 POSICOES = {"TOP": "no topo", "MIDDLE": "no meio", "BOTTOM": "no bot",
             "UTILITY": "no bot", "JUNGLE": "na selva"}
@@ -527,14 +652,22 @@ class Voz:
     def _loop(self):
         import pyttsx3
         motor = pyttsx3.init()
-        for v in motor.getProperty("voices"):
-            nome = (v.name + " " + v.id).lower()
-            if "portug" in nome or "brazil" in nome or "pt-br" in nome or "maria" in nome:
-                motor.setProperty("voice", v.id)
-                break
-        motor.setProperty("rate", 185)
+        usando = (None, None)
         while True:
             frase = self.fila.get()
+            escolha = (CONFIG.get("voz_windows", ""), CONFIG.get("velocidade_voz", 185))
+            if escolha != usando:  # voz ou velocidade mudou nas configurações
+                usando = escolha
+                ids = [v.id for v in motor.getProperty("voices")]
+                if escolha[0] in ids:
+                    motor.setProperty("voice", escolha[0])
+                else:
+                    for v in motor.getProperty("voices"):
+                        nome = (v.name + " " + v.id).lower()
+                        if any(x in nome for x in ("portug", "brazil", "pt-br", "maria")):
+                            motor.setProperty("voice", v.id)
+                            break
+                motor.setProperty("rate", escolha[1])
             motor.say(frase)
             motor.runAndWait()
 
@@ -551,6 +684,37 @@ class Voz:
 # ---------------------------------------------------------------------------
 # Comandos de voz (offline, Vosk)
 # ---------------------------------------------------------------------------
+def listar_vozes() -> list[tuple[str, str]]:
+    """Vozes SAPI instaladas no Windows: [(nome, id)]. O id é o que o pyttsx3 usa."""
+    try:
+        import winreg
+    except ImportError:
+        return []
+    vozes = []
+    caminho = r"SOFTWARE\Microsoft\Speech\Voices\Tokens"
+    for raiz, nome_raiz in ((winreg.HKEY_LOCAL_MACHINE, "HKEY_LOCAL_MACHINE"),
+                            (winreg.HKEY_CURRENT_USER, "HKEY_CURRENT_USER")):
+        try:
+            chave = winreg.OpenKey(raiz, caminho)
+        except OSError:
+            continue
+        i = 0
+        while True:
+            try:
+                token = winreg.EnumKey(chave, i)
+            except OSError:
+                break
+            i += 1
+            try:
+                nome = winreg.QueryValue(chave, token)
+            except OSError:
+                nome = token
+            vid = f"{nome_raiz}\\{caminho}\\{token}"
+            if all(vid != v[1] for v in vozes):
+                vozes.append((nome, vid))
+    return vozes
+
+
 def listar_microfones() -> list[str]:
     """Nomes dos dispositivos de entrada de áudio (para escolher nas Configurações)."""
     try:
@@ -567,7 +731,7 @@ def listar_microfones() -> list[str]:
 class OuvidoComandos:
     """Escuta o microfone e coloca comandos reconhecidos numa fila.
 
-    Usa um vocabulário fechado (só as frases de FRASES_COMANDO), o que deixa
+    Usa um vocabulário fechado (palavra de chamada + comandos), o que deixa
     o reconhecimento rápido e evita disparar com conversa normal.
     """
 
@@ -581,27 +745,10 @@ class OuvidoComandos:
         except ImportError:
             print("(Comandos de voz desligados: rode  python -m pip install vosk sounddevice)")
             return
-        if not self._garantir_modelo():
+        if not garantir_modelo_voz():
             return
         self.ativo = True
         threading.Thread(target=self._loop, daemon=True).start()
-
-    def _garantir_modelo(self) -> bool:
-        if PASTA_MODELO_VOZ.exists() and any(PASTA_MODELO_VOZ.iterdir()):
-            return True
-        import io
-        import urllib.request
-        import zipfile
-        print("Baixando modelo de voz em português (~30 MB, só na primeira vez)...")
-        try:
-            with urllib.request.urlopen(URL_MODELO_VOZ, timeout=120) as r:
-                dados = r.read()
-            with zipfile.ZipFile(io.BytesIO(dados)) as z:
-                z.extractall(PASTA_MODELO_VOZ)
-            return True
-        except Exception as e:  # noqa: BLE001
-            print(f"(Não consegui baixar o modelo de voz: {e}. Comandos de voz desligados.)")
-            return False
 
     # O microfone só fica aberto enquanto `escutar` estiver ligado (durante a
     # partida, por padrão). Microfone aberto faz fones Bluetooth trocarem para o
@@ -618,7 +765,6 @@ class OuvidoComandos:
         vosk.SetLogLevel(-1)
         pasta = next(p for p in PASTA_MODELO_VOZ.iterdir() if p.is_dir())
         modelo = vosk.Model(str(pasta))
-        gramatica = json.dumps(list(FRASES_COMANDO) + ["[unk]"], ensure_ascii=False)
         audio: "queue.Queue[bytes]" = queue.Queue()
 
         def callback(indata, frames, tempo, status):
@@ -626,13 +772,20 @@ class OuvidoComandos:
 
         while True:
             self.escutar.wait()
-            rec = vosk.KaldiRecognizer(modelo, 16000, gramatica)
+            # a palavra de chamada pode ter mudado: monta a gramática de novo
+            frases = frases_comando()
+            if not frases:
+                print(f"(“{CONFIG.get('palavra_chamada')}” não está no dicionário de voz. "
+                      "Troque a palavra de chamada nas configurações.)")
+                self.escutar.clear()
+                continue
+            rec = vosk.KaldiRecognizer(modelo, 16000,
+                                       json.dumps(list(frases) + ["[unk]"], ensure_ascii=False))
             dispositivo = CONFIG.get("microfone") or None
             try:
                 with sd.RawInputStream(samplerate=16000, blocksize=8000, dtype="int16",
                                        channels=1, callback=callback, device=dispositivo):
-                    print('Microfone ligado. Diga "coach itens", "coach silêncio", '
-                          '"coach volta" ou "coach anota".')
+                    print(f"Microfone ligado. Diga {exemplos_chamada()}.")
                     while self.escutar.is_set():
                         try:
                             bloco = audio.get(timeout=0.5)
@@ -640,8 +793,9 @@ class OuvidoComandos:
                             continue
                         if rec.AcceptWaveform(bloco):
                             texto = json.loads(rec.Result()).get("text", "").strip()
-                            if texto in FRASES_COMANDO:
-                                self.fila.put(FRASES_COMANDO[texto])
+                            acao = achar_comando(texto, frases)
+                            if acao:
+                                self.fila.put(acao)
                 print("Microfone desligado.")
             except Exception as e:  # noqa: BLE001
                 print(f"(Erro no microfone: {e}. Comandos de voz desligados.)")
@@ -761,6 +915,8 @@ def url_imagem(tipo: str, ident: str) -> str:
         return f"{DDRAGON}/cdn/img/{ident}"
     if tipo == "fragmento":
         return CDRAGON_FRAGMENTOS + ARQ_FRAGMENTO[ident] + ".png"
+    if tipo == "perfil":
+        return f"{DDRAGON}/cdn/{versao_dados()}/img/profileicon/{ident}.png"
     raise ValueError(tipo)
 
 
@@ -1249,26 +1405,6 @@ class Coach:
         self.plano_texto = frases
         for f in frases:
             self.voz.falar(f)
-        if CONFIG["plano_por_ia"]:
-            threading.Thread(target=self._plano_ia, args=(jogo,), daemon=True).start()
-
-    def _plano_ia(self, jogo: dict):
-        import ia_chat  # importado aqui para evitar import circular
-        chave = ia_chat.obter_chave()
-        if not chave:
-            return
-        resumo = {"meu_time": [(p["championName"], p.get("position")) for p in jogo["allPlayers"]
-                               if p.get("team") == self.meu_time],
-                  "inimigos": [(p["championName"], p.get("position")) for p in jogo["allPlayers"]
-                               if p.get("team") != self.meu_time],
-                  "eu": (self.eu["championName"], self.eu.get("position"))}
-        try:
-            texto = ia_chat.plano_por_ia(resumo, chave, CONFIG["modelo_ia"])
-            if texto:
-                self.plano_texto.append(texto)
-                self.voz.falar("Plano da IA: " + texto, forcar=True)
-        except Exception as e:  # noqa: BLE001
-            print(f"(Plano da IA indisponível: {e})")
 
     # -- diferença de ouro entre os times ----------------------------------
     def checar_diferenca_ouro(self, jogo: dict, t: float):

@@ -2,8 +2,7 @@
 
 Tudo aqui usa só o que aparece na tela de carregamento: campeões, times e
 funções. As regras são heurísticas simples (força por fase, iniciação,
-ameaças); com a chave da API do Claude configurada, o app pode pedir à IA um
-plano mais detalhado (ver ia_chat.py).
+ameaças).
 """
 
 from funcoes_comuns import comum

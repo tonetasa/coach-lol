@@ -18,10 +18,11 @@ Na primeira vez, o Quíron pergunta seu Riot ID, elo, funções e campeões (poo
 - **Draft:** seu histórico na função, a melhor escolha do seu pool na sua vez (com os motivos) e, quando o draft fecha, os pontos positivos e de atenção do seu time.
 - **Início da partida:** build, opções de itens contra a composição inimiga, plano de jogo (fase forte, iniciação, ameaças, sua rota) e, para o caçador, a rota inicial da selva.
 - **Durante a partida** (opcional): diferença de ouro dos times, ouro para o próximo item, CS/min, caçador inimigo visto em abates/objetivos, recompensas.
-- **Chat com IA** (opcional, com sua chave da API do Claude): perguntas sobre as suas partidas, com o histórico como contexto.
 - **Fim da partida:** resumo falado, alerta de sequência de derrotas e de jogo de madrugada.
 - **Relatório:** evolução de participação em abates, mortes antes dos 14 min, por campeão e por horário.
-- **Comandos de voz** (offline): "coach itens", "coach silêncio", "coach volta", "coach anota".
+- **Comandos de voz** (offline): "Quíron itens", "Quíron silêncio", "Quíron volta", "Quíron anota". A palavra de chamada pode ser trocada em Configurações → Voz.
+- **Voz à escolha**: qualquer voz do Windows instalada, em três velocidades.
+- **Perfil pelo cliente**: busca o Riot ID, preenche o elo e sugere funções e campeões pelas últimas partidas.
 - **Builds para qualquer campeão:** os campeões em `builds.json` têm build pesquisada a cada patch; os demais recebem uma build genérica pela classe (mago, atirador, tanque...), com versão própria para a selva. Campeões fora da função em que costumam ser jogados (lista em `funcoes_comuns.py`) aparecem com aviso: a build é uma estimativa. No app, *Pedir build pesquisada* abre um pedido aqui no GitHub, e a atualização semanal inclui o campeão.
 - **Builds editáveis** no app; suas edições ficam só no seu PC e têm prioridade.
 

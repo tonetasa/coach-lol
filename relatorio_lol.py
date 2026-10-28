@@ -4,7 +4,7 @@ Relatório LoL — evolução das suas partidas
 
 Lê os resumos que o coach salva em ./partidas/ e gera uma página HTML com
 gráficos (participação em abates, mortes antes dos 14 min), números por
-campeão, por horário e os momentos que você marcou com "coach anota".
+campeão, por horário e os momentos que você marcou com "Quíron anota".
 
 Uso (na mesma pasta do coach_lol.py):
     python relatorio_lol.py            # últimos 7 dias
@@ -259,7 +259,7 @@ function render() {
       DADOS.anotadas.map(j => `<li>${j.quando} · ${esc(j.campeao)} (${j.resultado}): ` +
         j.anotacoes.join(", ") + '</li>').join("") + '</ul>';
   } else {
-    h += '<p class="nota">Nenhum momento anotado. Durante a partida, diga “coach anota”.</p>';
+    h += '<p class="nota">Nenhum momento anotado. Durante a partida, diga “Quíron anota” (ou a sua palavra de chamada + “anota”).</p>';
   }
   h += '</div>';
 
