@@ -5,6 +5,7 @@ uma release no GitHub com a tag v<versão> (ex.: v1.0.1) e o arquivo
 Quiron-Setup-<versão>.exe anexado. O app avisa e instala com um clique.
 """
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -62,5 +63,13 @@ def instalar(instalador: Path):
     """Roda o instalador em modo silencioso; ele fecha o app e o reabre no fim."""
     if sys.platform != "win32":
         raise RuntimeError("A atualização automática só funciona no Windows.")
+    # O app é um executável do PyInstaller: ele deixa variáveis de ambiente
+    # internas (_PYI_*, _MEIPASS2) que o processo filho herda. Se o instalador
+    # reabrir o app novo com essas variáveis, ele procura a pasta temporária do
+    # app antigo (já apagada) e falha com "Failed to load Python DLL".
+    # Por isso o instalador roda com o ambiente limpo.
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith(("_PYI", "_MEI"))}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
     subprocess.Popen([str(instalador), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
-                     close_fds=True)
+                     close_fds=True, env=env, creationflags=flags)
