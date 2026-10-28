@@ -147,6 +147,8 @@ CONFIG = {
     "importar_runas": True,
     "importar_itens": True,
     "importar_feiticos": False,
+    "sugerir_escolha": True,     # na sua vez no draft: melhor campeão do seu pool
+    "analise_draft": True,       # no fim do draft: pontos positivos e negativos
 
     # Início da partida: plano de jogo e, se você for o caçador, a rota inicial
     "plano_pre_partida": True,
@@ -1355,6 +1357,9 @@ class SelecaoCampeoes:
         self.inimigos_vistos: set[str] = set()
         self.notas_faladas: set[str] = set()
         self.importado: str | None = None
+        self.vez_anunciada = None        # id da ação de escolha já comentada
+        self.draft_analisado = False
+        self.analise: dict | None = None  # última análise (para o app mostrar)
 
     def ler(self) -> dict | None:
         self.cliente.pasta = Path(CONFIG["pasta_lol"])
@@ -1434,6 +1439,67 @@ class SelecaoCampeoes:
             self.inimigos_vistos |= inimigos
             if CONFIG["ajuda_selecao"]:
                 self.falar_notas(funcao)
+        self.checar_vez(sessao, eu, funcao)
+        self.checar_fim_do_draft(sessao, eu)
+
+    # -- draft ----------------------------------------------------------------
+    def _times(self, sessao: dict, eu: dict) -> tuple[list[str], list[str]]:
+        aliados = [self.por_chave.get(p.get("championId")) for p in sessao.get("myTeam", [])
+                   if p.get("championId") and p is not eu]
+        inimigos = [self.por_chave.get(p.get("championId"))
+                    for p in sessao.get("theirTeam", []) if p.get("championId")]
+        return [c for c in aliados if c], [c for c in inimigos if c]
+
+    def checar_vez(self, sessao: dict, eu: dict, funcao: str):
+        if not CONFIG["sugerir_escolha"]:
+            return
+        local = sessao.get("localPlayerCellId")
+        acoes = [a for grupo in sessao.get("actions", []) for a in grupo]
+        minha = next((a for a in acoes if a.get("actorCellId") == local and a.get("type") == "pick"
+                      and a.get("isInProgress") and not a.get("completed")), None)
+        if not minha or minha.get("id") == self.vez_anunciada:
+            return
+        self.vez_anunciada = minha.get("id")
+        pool = POOL.get(funcao)
+        if not pool:
+            return
+        aliados, inimigos = self._times(sessao, eu)
+        banidos = {self.por_chave.get(a.get("championId")) for a in acoes
+                   if a.get("type") == "ban" and a.get("completed")}
+        nomes = lambda c: self.nomes.get(c, c)  # noqa: E731
+        ranking = plano.sugerir_escolha(pool, aliados, inimigos, banidos, estatisticas_pool(),
+                                        self.campeoes, ENGAJE, MUITO_CC, MERGULHO, nomes)
+        if not ranking:
+            self.voz.falar("Sua vez de escolher. Nenhum campeão do seu pool está disponível.")
+            return
+        melhor, _, motivos = ranking[0]
+        frase = f"Sua vez de escolher. Melhor opção: {nomes(melhor)}"
+        frase += (": " + "; ".join(motivos[:2]) + ".") if motivos else "."
+        if len(ranking) > 1:
+            frase += f" Alternativa: {nomes(ranking[1][0])}."
+        self.voz.falar(frase)
+
+    def checar_fim_do_draft(self, sessao: dict, eu: dict):
+        if not CONFIG["analise_draft"] or self.draft_analisado:
+            return
+        fase = (sessao.get("timer") or {}).get("phase")
+        if fase != "FINALIZATION":
+            return
+        self.draft_analisado = True
+        aliados, inimigos = self._times(sessao, eu)
+        meu = self.por_chave.get(eu.get("championId"))
+        if meu:
+            aliados.append(meu)
+        if len(aliados) < 3 or len(inimigos) < 3:
+            return
+        nomes = lambda c: self.nomes.get(c, c)  # noqa: E731
+        bons, ruins = plano.analisar_draft(aliados, inimigos, self.campeoes, ENGAJE, MUITO_CC,
+                                           MERGULHO, nomes)
+        self.analise = {"positivos": bons, "negativos": ruins}
+        self.voz.falar("Draft fechado. Pontos positivos: " + " ".join(bons[:2]))
+        self.voz.falar("Pontos de atenção: " + " ".join(ruins[:2]))
+        for extra in bons[2:] + ruins[2:]:
+            print("  • " + extra)
 
     def falar_pool(self, funcao: str):
         pool = POOL.get(funcao)
@@ -1538,8 +1604,9 @@ def rodar(parar: threading.Event | None = None, voz: "Voz | None" = None,
                     if cliente.aceitar_fila():
                         print("Partida encontrada: aceita automaticamente.")
                         novo = "Partida aceita"
-                usa_cliente = (CONFIG["ajuda_selecao"] or CONFIG["importar_runas"]
-                               or CONFIG["importar_itens"] or CONFIG["importar_feiticos"])
+                usa_cliente = any(CONFIG[k] for k in (
+                    "ajuda_selecao", "importar_runas", "importar_itens", "importar_feiticos",
+                    "sugerir_escolha", "analise_draft"))
                 if selecao and usa_cliente and not coach.em_partida:
                     selecao.processar(selecao.ler())
                     if selecao.ativa:

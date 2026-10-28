@@ -132,3 +132,133 @@ def rota_selva(jogo: dict, meu_time: str, campeoes: dict, id_campeao,
         motivo = "é o lado com mais controle de grupo"
     return (f"Você está no lado {lado}. Rota sugerida: {', '.join(rota)}, "
             f"terminando perto do {alvo}, porque {motivo}.")
+
+
+# ---------------------------------------------------------------------------
+# Draft: perfil dos times, sugestão de escolha e análise final
+# ---------------------------------------------------------------------------
+# Traços dos campeões do seu pool (usados para casar com o draft)
+TRACOS_POOL = {
+    "Fiddlesticks": {"teamfight", "dano_magico", "escala"},
+    "Karma": {"poke", "protecao", "dano_magico"},
+    "Lulu": {"protecao", "anti_mergulho", "dano_magico"},
+    "Seraphine": {"teamfight", "controle", "dano_magico", "escala"},
+    "Morgana": {"anti_engaje", "controle", "dano_magico"},
+    "Milio": {"anti_engaje", "protecao", "anti_mergulho"},
+}
+CURADORES = {"Soraka", "Yuumi", "Sona", "Nami", "Milio", "Seraphine", "Renata",
+             "Aatrox", "Vladimir", "DrMundo", "Warwick", "Sylas", "Briar", "Swain"}
+
+
+def perfil_time(ids: list[str], campeoes: dict, engaje: set, muito_cc: set,
+                mergulho: set) -> dict:
+    """Contagens que descrevem uma composição."""
+    p = {"magico": 0, "fisico": 0, "tanques": 0, "iniciacao": 0, "cedo": 0,
+         "escala": 0, "mergulho": 0, "engaje": 0, "cura": 0, "n": len(ids)}
+    for cid in ids:
+        c = campeoes.get(cid, {})
+        tags, info = c.get("tags", []), c.get("info", {})
+        suporte_puro = tags[:1] == ["Support"] and info.get("magic", 0) < 8
+        if not suporte_puro:
+            if info.get("magic", 0) > info.get("attack", 0):
+                p["magico"] += 1
+            else:
+                p["fisico"] += 1
+        p["tanques"] += "Tank" in tags
+        p["iniciacao"] += cid in engaje or "Tank" in tags or cid in muito_cc
+        p["cedo"] += cid in FORTES_CEDO
+        p["escala"] += cid in ESCALAM
+        p["mergulho"] += cid in mergulho or tags[:1] == ["Assassin"]
+        p["engaje"] += cid in engaje
+        p["cura"] += cid in CURADORES
+    return p
+
+
+def sugerir_escolha(pool: list[str], aliados: list[str], inimigos: list[str],
+                    indisponiveis: set, stats: dict, campeoes: dict, engaje: set,
+                    muito_cc: set, mergulho: set, nomes) -> list[tuple[str, float, list[str]]]:
+    """Ordena o seu pool para este draft. Retorna [(campeão, nota, motivos)]."""
+    a = perfil_time(aliados, campeoes, engaje, muito_cc, mergulho)
+    i = perfil_time(inimigos, campeoes, engaje, muito_cc, mergulho)
+    resultado = []
+    for cid in pool:
+        if cid in indisponiveis or cid in aliados or cid in inimigos:
+            continue
+        v, d = stats.get(cid, (0, 0))
+        taxa = (v + 1) / (v + d + 2)  # suaviza poucas partidas
+        nota = taxa * 100
+        motivos = [f"{round(100 * v / (v + d))}% em {v + d} partidas"] if v + d >= 5 else []
+        tracos = TRACOS_POOL.get(cid, set())
+        if i["engaje"] and "anti_engaje" in tracos:
+            nota += 6
+            alvo = " e ".join(nomes(c) for c in inimigos if c in engaje)
+            motivos.append(f"anula o engajamento de {alvo}")
+        if i["mergulho"] >= 1 and "anti_mergulho" in tracos:
+            nota += 5
+            motivos.append("protege o carry contra quem mergulha")
+        if a["magico"] == 0 and a["n"] >= 2 and "dano_magico" in tracos:
+            nota += 4
+            motivos.append("seu time ainda não tem dano mágico")
+        if a["iniciacao"] == 0 and a["n"] >= 2 and "controle" in tracos:
+            nota += 3
+            motivos.append("seu time está sem controle de grupo")
+        if a["escala"] >= 2 and "teamfight" in tracos:
+            nota += 2
+            motivos.append("combina com um time que escala para lutas")
+        if i["cura"] >= 2 and cid == "Morgana":
+            nota += 1
+        resultado.append((cid, round(nota, 1), motivos))
+    resultado.sort(key=lambda r: -r[1])
+    return resultado
+
+
+def analisar_draft(aliados: list[str], inimigos: list[str], campeoes: dict, engaje: set,
+                   muito_cc: set, mergulho: set, nomes) -> tuple[list[str], list[str]]:
+    """Pontos positivos e negativos do seu time em relação ao inimigo."""
+    a = perfil_time(aliados, campeoes, engaje, muito_cc, mergulho)
+    i = perfil_time(inimigos, campeoes, engaje, muito_cc, mergulho)
+    bons, ruins = [], []
+
+    # dano
+    if a["magico"] >= 2 and a["fisico"] >= 2:
+        bons.append("Dano misto: fica difícil para o inimigo montar resistência.")
+    elif a["magico"] <= 1 and a["n"] >= 5:
+        ruins.append("Dano quase todo físico: o inimigo pode comprar armadura e anular o time.")
+    elif a["fisico"] <= 1 and a["n"] >= 5:
+        ruins.append("Dano quase todo mágico: o inimigo pode comprar resistência mágica.")
+
+    # linha de frente
+    if a["tanques"] >= 1:
+        bons.append("Tem linha de frente para segurar as lutas.")
+    else:
+        ruins.append("Sem tanque: lutas longas e de frente favorecem o inimigo.")
+
+    # iniciação
+    if a["iniciacao"] - i["iniciacao"] >= 2:
+        bons.append("Mais iniciação que o inimigo: vocês escolhem quando lutar.")
+    elif i["iniciacao"] - a["iniciacao"] >= 2:
+        ruins.append("O inimigo tem mais iniciação: cuidado com corredores sem visão.")
+
+    # fase de jogo
+    fase = (a["cedo"] - a["escala"]) - (i["cedo"] - i["escala"])
+    if fase >= 2:
+        bons.append("Mais forte no início: dá para pressionar antes dos 20 minutos.")
+    elif fase <= -2:
+        bons.append("Escala melhor: o time fica mais forte no fim do jogo.")
+        ruins.append("Mais fraco no início: o inimigo vai tentar pressionar cedo.")
+
+    # ameaças
+    if i["mergulho"] >= 2:
+        alvo = " e ".join(nomes(c) for c in inimigos
+                          if c in mergulho or campeoes.get(c, {}).get("tags", [""])[0] == "Assassin")
+        ruins.append(f"Muitas ameaças de mergulho no inimigo: {alvo}.")
+    if i["cura"] >= 2:
+        ruins.append("O inimigo tem bastante cura: item de corte de cura vale a pena.")
+    if a["cura"] >= 2:
+        bons.append("Boa sustentação no seu time.")
+
+    if not bons:
+        bons.append("Composição sem grande vantagem clara.")
+    if not ruins:
+        ruins.append("Nenhuma fraqueza clara na composição.")
+    return bons, ruins
