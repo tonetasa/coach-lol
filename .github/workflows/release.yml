@@ -1,12 +1,12 @@
 name: Instalador
 
-# - A cada push na main: monta o instalador e guarda como artefato (teste).
-# - Ao criar uma tag v* (ex.: v1.0.1): monta e publica uma Release com o
-#   CoachLoL-Setup-<versão>.exe. O app instalado detecta e se atualiza.
+# A cada push na main: monta o instalador no Windows e guarda como artefato.
+# Se a VERSAO de versao.py ainda não tem Release, publica a Release v<VERSAO>
+# com o CoachLoL-Setup-<versão>.exe. O app instalado detecta e se atualiza.
+# (Para lançar uma versão nova, basta mudar VERSAO e fazer push.)
 on:
   push:
     branches: [main]
-    tags: ["v*"]
     paths-ignore: ["builds.json", "README.md"]
   workflow_dispatch:
 
@@ -32,9 +32,6 @@ jobs:
         run: |
           VER=$(python gerar_info_versao.py)
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
-          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$VER" ]]; then
-            echo "::error::A tag $GITHUB_REF_NAME não bate com VERSAO=$VER em versao.py"; exit 1
-          fi
 
       - name: Executável
         run: >
@@ -59,9 +56,24 @@ jobs:
           name: CoachLoL-Setup-${{ steps.versao.outputs.ver }}
           path: instalador/*.exe
 
+      - name: Release já existe?
+        id: existe
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.versao.outputs.ver }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "sim=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sim=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publicar release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.ref == 'refs/heads/main' && steps.existe.outputs.sim == 'false'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.versao.outputs.ver }}
+          name: Coach LoL ${{ steps.versao.outputs.ver }}
+          target_commitish: ${{ github.sha }}
           files: instalador/*.exe
           generate_release_notes: true

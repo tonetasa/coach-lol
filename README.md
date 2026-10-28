@@ -38,9 +38,9 @@ criar_instalador.bat          # gera o instalador localmente (Windows)
 
 ### Lançar uma versão
 
-1. Mude `VERSAO` em `versao.py` (ex.: `1.0.1`) e faça commit.
-2. Crie e envie a tag: `git tag v1.0.1 && git push origin v1.0.1`.
-3. O GitHub Actions monta o instalador e publica a Release.
+1. Mude `VERSAO` em `versao.py` (ex.: `1.0.1`), faça commit e push na `main`.
+2. O GitHub Actions monta o instalador no Windows e publica a Release `v1.0.1`.
+3. Quem tem o app instalado recebe o aviso "Versão 1.0.1 disponível".
 
 ### Builds
 
