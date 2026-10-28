@@ -1,0 +1,72 @@
+{
+  "patch": "26.21",
+  "atualizado": "2026-10-28",
+  "campeoes": {
+    "Fiddlesticks": {
+      "funcao": "JUNGLE",
+      "runas": "Eletrocutar",
+      "itens": [
+        "Malignance",
+        "Sorcerer's Shoes",
+        "Liandry's Torment",
+        "Zhonya's Hourglass"
+      ],
+      "ajustes": "mago"
+    },
+    "Karma": {
+      "funcao": "UTILITY",
+      "runas": "Aery",
+      "itens": [
+        "Ionian Boots of Lucidity",
+        "Echoes of Helia",
+        "Moonstone Renewer",
+        "Redemption"
+      ],
+      "ajustes": "encantador"
+    },
+    "Lulu": {
+      "funcao": "UTILITY",
+      "runas": "Aery",
+      "itens": [
+        "Ardent Censer",
+        "Ionian Boots of Lucidity",
+        "Mikael's Blessing",
+        "Moonstone Renewer"
+      ],
+      "ajustes": "encantador"
+    },
+    "Seraphine": {
+      "funcao": "UTILITY",
+      "runas": "Aery",
+      "itens": [
+        "Echoes of Helia",
+        "Ionian Boots of Lucidity",
+        "Diadem of Songs",
+        "Moonstone Renewer"
+      ],
+      "ajustes": "encantador"
+    },
+    "Morgana": {
+      "funcao": "UTILITY",
+      "runas": "Cometa Arcano",
+      "itens": [
+        "Blackfire Torch",
+        "Ionian Boots of Lucidity",
+        "Zhonya's Hourglass",
+        "Rylai's Crystal Scepter"
+      ],
+      "ajustes": "mago"
+    },
+    "Milio": {
+      "funcao": "UTILITY",
+      "runas": "Aery",
+      "itens": [
+        "Echoes of Helia",
+        "Ionian Boots of Lucidity",
+        "Moonstone Renewer",
+        "Ardent Censer"
+      ],
+      "ajustes": "encantador"
+    }
+  }
+}

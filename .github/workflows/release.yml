@@ -1,0 +1,67 @@
+name: Instalador
+
+# - A cada push na main: monta o instalador e guarda como artefato (teste).
+# - Ao criar uma tag v* (ex.: v1.0.1): monta e publica uma Release com o
+#   CoachLoL-Setup-<versão>.exe. O app instalado detecta e se atualiza.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore: ["builds.json", "README.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Dependências
+        run: python -m pip install --upgrade pyinstaller -r requirements.txt
+
+      - name: Versão
+        id: versao
+        shell: bash
+        run: |
+          VER=$(python gerar_info_versao.py)
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$VER" ]]; then
+            echo "::error::A tag $GITHUB_REF_NAME não bate com VERSAO=$VER em versao.py"; exit 1
+          fi
+
+      - name: Executável
+        run: >
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name CoachLoL
+          --icon icone.ico --version-file version_info.txt --add-data "icone.ico;."
+          --hidden-import pyttsx3.drivers --hidden-import pyttsx3.drivers.sapi5
+          --collect-submodules comtypes --collect-all vosk --collect-all sounddevice
+          --collect-all customtkinter --hidden-import pystray._win32
+          coach_app.py
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc /Q "/DAppVersion=${{ steps.versao.outputs.ver }}" CoachLoL.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Guardar instalador (teste)
+        uses: actions/upload-artifact@v4
+        with:
+          name: CoachLoL-Setup-${{ steps.versao.outputs.ver }}
+          path: instalador/*.exe
+
+      - name: Publicar release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: instalador/*.exe
+          generate_release_notes: true

@@ -1,0 +1,7 @@
+requests
+pyttsx3
+vosk
+sounddevice
+customtkinter
+pystray
+pillow

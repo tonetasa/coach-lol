@@ -1,0 +1,1384 @@
+"""
+Coach LoL — assistente de voz em tempo real (protótipo)
+=======================================================
+
+Lê a Live Client Data API OFICIAL da Riot (https://127.0.0.1:2999), que o
+próprio cliente do LoL disponibiliza no seu PC durante a partida, e dá
+lembretes por voz.
+
+Avisos durante a partida ligados. Para ficar só no "antes e depois" (build
+no início, silêncio na partida, resumo no fim), use somente_antes_e_depois
+no CONFIG.
+
+Regra de ouro deste projeto: ele só usa informação que você JÁ consegue ver
+na tela (seu ouro, seus itens, tempo de jogo, placar do Tab). Não lê memória,
+não mostra inimigo fora da visão, não cronometra feitiços/ult inimigos e não
+cronometra renascimento de objetivos.
+
+Uso:
+    python -m pip install requests pyttsx3 vosk sounddevice
+    python coach_lol.py                 # com voz e comandos pelo microfone
+    python coach_lol.py --sem-voz       # só texto no terminal
+    python coach_lol.py --sem-microfone # sem comandos de voz
+
+Comandos de voz: "coach itens", "coach silêncio", "coach volta", "coach anota".
+
+Também faz: ajuda na seleção de campeões (seu histórico por função e notas
+sobre o time inimigo), aviso de ouro para o próximo item, CS/min baixo, e,
+no fim, resumo falado com aviso de sequência de derrotas e de madrugada.
+Para ver a evolução: python relatorio_lol.py
+
+Deixe rodando antes de entrar na fila. Ele espera a partida começar sozinho.
+Ao fim de cada partida, salva um resumo em ./partidas/ para revisarmos juntos.
+"""
+
+import argparse
+import json
+import os
+import queue
+import sys
+import threading
+import time
+from datetime import datetime
+from pathlib import Path
+
+import requests
+import urllib3
+
+# Pasta dos dados (partidas, caches, configuração, modelo de voz). No .exe é a
+# pasta do executável; rodando o .py, é a pasta do script.
+def _pasta_dados() -> Path:
+    """Instalado (.exe): %APPDATA%\\CoachLoL. Rodando o .py: a pasta do script."""
+    if getattr(sys, "frozen", False):
+        pasta = Path(os.environ.get("APPDATA", str(Path.home()))) / "CoachLoL"
+        pasta.mkdir(parents=True, exist_ok=True)
+        return pasta
+    return Path(__file__).parent
+
+
+BASE = _pasta_dados()
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ---------------------------------------------------------------------------
+# CONFIGURAÇÃO — ajuste à vontade
+# ---------------------------------------------------------------------------
+CONFIG = {
+    # MODO "ANTES E DEPOIS" (padrão): fica só no que a Riot cita como aprovado.
+    #   - No início: build e ajustes para a composição inimiga (informação
+    #     estática da tela de carregamento).
+    #   - Durante a partida: NÃO fala nem mostra avisos. Só registra dados
+    #     para o resumo (e responde aos seus comandos de voz).
+    #   - No fim: resumo falado e salvo em ./partidas/.
+    # Mude para False para reativar os avisos durante a partida (zona cinzenta
+    # das regras da Riot; use por sua conta).
+    "somente_antes_e_depois": False,
+    "voz_ligada": True,
+
+    # App (janela): bandeja e inicialização
+    "minimizar_para_bandeja": True,
+    "iniciar_coach_ao_abrir": False,
+    "iniciar_com_windows": False,
+    "verificar_atualizacoes": True,
+    "builds_automaticas": True,
+
+    "intervalo_leitura_s": 2.0,
+
+    # Ouro acumulado (vivo) que dispara sugestão de voltar à base
+    "ouro_para_recall": 1300,
+    "intervalo_aviso_ouro_s": 60,
+
+    # Participação em abates (KP): avisa se ficar abaixo disso após X minutos
+    "kp_minimo": 0.50,
+    "kp_checar_apos_min": 10,
+    "intervalo_aviso_kp_s": 240,
+
+    # Sentinela de controle: lembra se você estiver sem uma no inventário
+    "lembrar_sentinela_controle": True,
+    "intervalo_aviso_sentinela_s": 180,
+
+    # Lembretes por tempo de jogo (minuto -> frase). Confira os tempos do
+    # patch atual e edite aqui; são só lembretes de relógio, como olhar o
+    # cronômetro do jogo.
+    "lembretes_tempo": {
+        "4:30": "Primeiro dragão nasce em breve.",
+        "13:30": "As placas das torres caem aos 14 minutos.",
+        "19:30": "Vinte minutos de jogo.",
+    },
+
+    # Frase quando você chega no nível 6, 11 e 16
+    "avisar_niveis_ult": True,
+
+    # Analisa a composição inimiga no início e fala os ajustes de build
+    "analisar_composicao": True,
+
+    # Avisa quando o caçador inimigo (quem tem Smite) aparece no histórico de
+    # abates/objetivos — a mesma informação do canto da tela.
+    "avisar_cacador_inimigo": True,
+    "intervalo_aviso_cacador_s": 15,
+
+    # Recompensa ("Neutralizado"): estimativa por sequência de abates e por
+    # valor dos itens (ambos visíveis no histórico e no Tab).
+    "avisar_recompensa": True,
+    "sequencia_recompensa": 3,          # abates seguidos sem morrer
+    "vantagem_itens_recompensa": 2000,  # ouro em itens acima da média da partida
+    "intervalo_aviso_recompensa_s": 90,
+
+    # Ouro para o próximo item da build (o seu ouro e a sua loja)
+    "avisar_proximo_item": True,
+    "ouro_perto_do_item": 250,
+
+    # CS por minuto abaixo do mínimo da função (suporte não tem aviso)
+    "avisar_cs_baixo": True,
+    "cs_minimo": {"JUNGLE": 5.5, "TOP": 6.5, "MIDDLE": 6.5, "BOTTOM": 7.0},
+    "cs_checar_apos_min": 8,
+    "intervalo_aviso_cs_s": 240,
+
+    # Depois da partida: aviso de sequência de derrotas e de jogo de madrugada
+    "avisar_sequencia_derrotas": 2,
+    "madrugada_entre": (1, 6),   # horas (início, fim)
+
+    # Ajuda na seleção de campeões (API local do cliente do LoL)
+    "ajuda_selecao": True,
+    "pasta_lol": r"C:\Riot Games\League of Legends",
+
+    # Comandos de voz (reconhecimento offline com Vosk). Diga "coach" + comando:
+    #   "coach itens"    -> repete a build e os ajustes contra o time inimigo
+    #   "coach silêncio" -> para de falar por alguns minutos
+    #   "coach volta"    -> volta a falar
+    #   "coach anota"    -> marca o momento para revisar no resumo da partida
+    "comandos_de_voz": True,
+    "minutos_silencio": 3,
+}
+
+CONFIG_ARQ = BASE / "config_coach.json"
+
+
+def migrar_dados_antigos() -> int:
+    """Copia partidas e configuração da versão sem instalador (pasta Downloads).
+
+    Só copia o que ainda não existe na pasta nova; nada é apagado da antiga.
+    """
+    import shutil
+    origens = [Path.home() / "Downloads", Path(sys.executable).parent]
+    copiados = 0
+    for origem in origens:
+        if origem.resolve() == BASE.resolve():
+            continue
+        antigas = origem / "partidas"
+        if antigas.is_dir():
+            (BASE / "partidas").mkdir(exist_ok=True)
+            for arq in antigas.glob("*.json"):
+                destino = BASE / "partidas" / arq.name
+                if not destino.exists():
+                    shutil.copy2(arq, destino)
+                    copiados += 1
+        for nome in ("config_coach.json",):
+            if (origem / nome).exists() and not (BASE / nome).exists():
+                shutil.copy2(origem / nome, BASE / nome)
+        if (origem / "modelo_voz").is_dir() and not (BASE / "modelo_voz").exists():
+            shutil.copytree(origem / "modelo_voz", BASE / "modelo_voz")
+    return copiados
+
+
+def carregar_config():
+    """Aplica em CONFIG o que foi salvo pelo app (config_coach.json)."""
+    try:
+        salvo = json.loads(CONFIG_ARQ.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    for k, v in salvo.items():
+        if k in CONFIG:
+            CONFIG[k] = tuple(v) if isinstance(CONFIG[k], tuple) else v
+
+
+def salvar_config(mudancas: dict):
+    try:
+        salvo = json.loads(CONFIG_ARQ.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        salvo = {}
+    salvo.update(mudancas)
+    CONFIG.update(mudancas)
+    CONFIG_ARQ.write_text(json.dumps(salvo, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Builds: arquivos e atualização
+# ---------------------------------------------------------------------------
+REPO_GITHUB = "tonetasa/coach-lol"
+URL_BUILDS_REMOTAS = f"https://raw.githubusercontent.com/{REPO_GITHUB}/main/builds.json"
+ARQ_BUILDS_REMOTAS = BASE / "builds_baixadas.json"
+ARQ_BUILDS_USUARIO = BASE / "builds_usuario.json"
+
+
+def _ler_json(arq: Path) -> dict:
+    try:
+        return json.loads(arq.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _build_valida(b) -> bool:
+    return (isinstance(b, dict) and isinstance(b.get("itens"), list)
+            and all(isinstance(i, str) for i in b["itens"])
+            and b.get("ajustes", "mago") in TIPOS_AJUSTE)
+
+
+def _versao_patch(p: str) -> tuple:
+    try:
+        return tuple(int(x) for x in str(p).split("."))
+    except ValueError:
+        return (0,)
+
+
+def carregar_builds():
+    """Monta BUILDS: padrão <- baixadas (se patch >= padrão) <- suas edições."""
+    base = {k: dict(v) for k, v in BUILDS_PADRAO.items()}
+    info = {"patch": PATCH_PADRAO, "fonte": "padrão"}
+    remoto = _ler_json(ARQ_BUILDS_REMOTAS)
+    if (isinstance(remoto.get("campeoes"), dict)
+            and _versao_patch(remoto.get("patch")) >= _versao_patch(PATCH_PADRAO)):
+        for cid, b in remoto["campeoes"].items():
+            if _build_valida(b):
+                base[cid] = b
+        info = {"patch": remoto.get("patch"), "fonte": "GitHub",
+                "atualizado": remoto.get("atualizado")}
+    usuario = _ler_json(ARQ_BUILDS_USUARIO)
+    for cid, b in usuario.items():
+        if _build_valida(b):
+            base[cid] = dict(b, personalizado=True)
+    BUILDS.clear()
+    for cid, b in base.items():
+        BUILDS[cid] = dict(b, ajustes=TIPOS_AJUSTE[b.get("ajustes", "mago")],
+                           tipo_ajuste=b.get("ajustes", "mago"))
+    INFO_BUILDS.clear()
+    INFO_BUILDS.update(info)
+
+
+def baixar_builds() -> str | None:
+    """Baixa builds.json do GitHub. Retorna o patch se mudou, senão None."""
+    r = requests.get(URL_BUILDS_REMOTAS, timeout=8)
+    r.raise_for_status()
+    dados = r.json()
+    if not isinstance(dados.get("campeoes"), dict):
+        raise ValueError("builds.json sem a chave 'campeoes'")
+    antigo = _ler_json(ARQ_BUILDS_REMOTAS)
+    ARQ_BUILDS_REMOTAS.write_text(json.dumps(dados, ensure_ascii=False, indent=2),
+                                  encoding="utf-8")
+    carregar_builds()
+    mudou = antigo.get("patch") != dados.get("patch") or antigo.get("campeoes") != dados["campeoes"]
+    return dados.get("patch") if mudou else None
+
+
+def salvar_build_usuario(cid: str, build: dict):
+    dados = _ler_json(ARQ_BUILDS_USUARIO)
+    dados[cid] = {k: build[k] for k in ("funcao", "runas", "itens", "ajustes") if k in build}
+    ARQ_BUILDS_USUARIO.write_text(json.dumps(dados, ensure_ascii=False, indent=2),
+                                  encoding="utf-8")
+    carregar_builds()
+
+
+def restaurar_build(cid: str):
+    dados = _ler_json(ARQ_BUILDS_USUARIO)
+    dados.pop(cid, None)
+    ARQ_BUILDS_USUARIO.write_text(json.dumps(dados, ensure_ascii=False, indent=2),
+                                  encoding="utf-8")
+    carregar_builds()
+
+
+def exportar_builds_padrao() -> dict:
+    """Formato do builds.json publicado no GitHub."""
+    return {"patch": PATCH_PADRAO, "atualizado": datetime.now().date().isoformat(),
+            "campeoes": BUILDS_PADRAO}
+
+
+URL_MODELO_VOZ = "https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip"
+PASTA_MODELO_VOZ = BASE / "modelo_voz"
+FRASES_COMANDO = {
+    "coach itens": "build", "coach repete os itens": "build",
+    "coach silêncio": "silencio", "coach cala a boca": "silencio",
+    "coach volta": "volta", "coach pode falar": "volta",
+    "coach anota": "anota", "coach marca": "anota",
+}
+
+POSICOES = {"TOP": "no topo", "MIDDLE": "no meio", "BOTTOM": "no bot",
+            "UTILITY": "no bot", "JUNGLE": "na selva"}
+
+# ---------------------------------------------------------------------------
+# BUILDS — patch 26.21 (atualize junto com o documento "Builds LoL")
+# Chave = id do campeão no Data Dragon (ex.: "MonkeyKing" para Wukong).
+# Itens em inglês, como no Data Dragon; o coach fala o nome em português.
+# "itens" = ordem principal, usada no aviso de ouro para o próximo item.
+# ---------------------------------------------------------------------------
+# Ajustes por composição: (descrição, [itens opcionais])
+AJUSTES_MAGO = {
+    "ap": ("muito dano mágico", ["Banshee's Veil"]),
+    "ad": ("muito dano físico", ["Zhonya's Hourglass"]),
+    "cura": ("muita cura", ["Oblivion Orb", "Morellonomicon"]),
+    "tanques": ("dois ou mais tanques", ["Void Staff", "Liandry's Torment"]),
+    "cc": ("muito controle de grupo", ["Mercury's Treads"]),
+    "assassinos": ("assassino", ["Zhonya's Hourglass"]),
+}
+AJUSTES_ENCANTADOR = {
+    "ap": ("muito dano mágico", ["Mikael's Blessing"]),
+    "ad": ("muito dano físico", ["Locket of the Iron Solari"]),
+    "cura": ("muita cura", ["Oblivion Orb"]),
+    "tanques": ("dois ou mais tanques", ["Shurelya's Battlesong"]),
+    "cc": ("muito controle de grupo", ["Mikael's Blessing"]),
+    "assassinos": ("assassino", ["Redemption", "Locket of the Iron Solari"]),
+}
+
+BUILDS_PADRAO = {
+    "Fiddlesticks": {"funcao": "JUNGLE", "runas": "Eletrocutar",
+                     "itens": ["Malignance", "Sorcerer's Shoes", "Liandry's Torment",
+                               "Zhonya's Hourglass"],
+                     "ajustes": "mago"},
+    "Karma": {"funcao": "UTILITY", "runas": "Aery",
+              "itens": ["Ionian Boots of Lucidity", "Echoes of Helia", "Moonstone Renewer",
+                        "Redemption"],
+              "ajustes": "encantador"},
+    "Lulu": {"funcao": "UTILITY", "runas": "Aery",
+             "itens": ["Ardent Censer", "Ionian Boots of Lucidity", "Mikael's Blessing",
+                       "Moonstone Renewer"],
+             "ajustes": "encantador"},
+    "Seraphine": {"funcao": "UTILITY", "runas": "Aery",
+                  "itens": ["Echoes of Helia", "Ionian Boots of Lucidity", "Diadem of Songs",
+                            "Moonstone Renewer"],
+                  "ajustes": "encantador"},
+    "Morgana": {"funcao": "UTILITY", "runas": "Cometa Arcano",
+                "itens": ["Blackfire Torch", "Ionian Boots of Lucidity", "Zhonya's Hourglass",
+                          "Rylai's Crystal Scepter"],
+                "ajustes": "mago"},
+    "Milio": {"funcao": "UTILITY", "runas": "Aery",
+              "itens": ["Echoes of Helia", "Ionian Boots of Lucidity", "Moonstone Renewer",
+                        "Ardent Censer"],
+              "ajustes": "encantador"},
+}
+PATCH_PADRAO = "26.21"
+TIPOS_AJUSTE = {"mago": AJUSTES_MAGO, "encantador": AJUSTES_ENCANTADOR}
+
+# Builds em uso: padrão  <-  baixadas do GitHub  <-  editadas por você no app.
+# (preenchido por carregar_builds(); "ajustes" já vem como dicionário)
+BUILDS: dict = {}
+INFO_BUILDS = {"patch": PATCH_PADRAO, "fonte": "padrão"}
+
+# Seu pool por função e o histórico da temporada (op.gg, 27/10/2026).
+# As partidas que o coach registra em ./partidas/ são somadas a isso.
+POOL = {
+    "JUNGLE": ["Fiddlesticks"],
+    "UTILITY": ["Karma", "Lulu", "Seraphine", "Morgana", "Milio"],
+}
+HISTORICO_BASE = {  # campeão: (vitórias, derrotas)
+    "Fiddlesticks": (70, 65), "Karma": (18, 8), "Lulu": (10, 5),
+    "Seraphine": (7, 8), "Morgana": (6, 6), "Milio": (0, 0),
+}
+# Suportes de engajamento (gancho/atordoamento) e campeões que mergulham
+ENGAJE = {"Leona", "Nautilus", "Thresh", "Blitzcrank", "Pyke", "Rell", "Alistar",
+          "Rakan", "Maokai", "Braum", "Poppy"}
+MERGULHO = {"Zed", "Talon", "Khazix", "Rengar", "Evelynn", "Akali", "Katarina",
+            "Qiyana", "Diana", "Vi", "Camille", "Irelia", "Fizz", "Kayn", "Nocturne",
+            "LeeSin", "Hecarim", "Kassadin", "Naafiri", "Briar", "Yone", "Yasuo"}
+
+# Campeões com cura forte (ids do Data Dragon)
+CURA_FORTE = {
+    "Soraka", "Aatrox", "Vladimir", "DrMundo", "Warwick", "Sylas", "Yuumi",
+    "Sona", "Nami", "Briar", "Fiddlesticks", "Swain", "Illaoi", "Olaf",
+    "Volibear", "Kayn", "Nasus", "Trundle", "Senna", "Milio", "Renata",
+    "Seraphine", "Zac", "Maokai", "Gwen", "Darius", "Samira",
+}
+# Campeões com muito controle de grupo (além dos marcados como Tank)
+MUITO_CC = {
+    "Leona", "Nautilus", "Morgana", "Lissandra", "Thresh", "Rell", "Ashe",
+    "Amumu", "Sejuani", "Maokai", "Zac", "Alistar", "Blitzcrank", "Pyke",
+    "Rakan", "Lux", "Neeko", "Annie", "Vi", "Skarner", "Poppy", "Taric",
+    "Braum", "Malphite", "Ornn", "Zyra", "Twisted Fate", "Veigar",
+    "Jarvan IV", "JarvanIV", "Cassiopeia", "Bard", "Rammus", "Nunu",
+}
+
+API = "https://127.0.0.1:2999/liveclientdata/allgamedata"
+DDRAGON = "https://ddragon.leagueoflegends.com"
+PASTA_PARTIDAS = BASE / "partidas"
+CACHE_CAMPEOES = BASE / "campeoes_cache.json"
+ID_SENTINELA_CONTROLE = 2055
+
+
+# ---------------------------------------------------------------------------
+# Voz
+# ---------------------------------------------------------------------------
+class Voz:
+    """Fala em uma thread separada para não travar a leitura do jogo."""
+
+    def __init__(self, ativa: bool):
+        self.mudo_ate = 0.0   # time.time() até quando fica em silêncio
+        self.bloqueado = False  # modo "antes e depois": sem avisos durante a partida
+        self.fila: "queue.Queue[str]" = queue.Queue()
+        self._thread: threading.Thread | None = None
+        self.ativa = False
+        self.ligar(ativa)
+
+    def ligar(self, ativa: bool):
+        """Liga ou desliga a fala (o motor de voz é criado uma vez só)."""
+        self.ativa = ativa
+        if ativa and self._thread is None:
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
+
+    def _loop(self):
+        import pyttsx3
+        motor = pyttsx3.init()
+        for v in motor.getProperty("voices"):
+            nome = (v.name + " " + v.id).lower()
+            if "portug" in nome or "brazil" in nome or "pt-br" in nome or "maria" in nome:
+                motor.setProperty("voice", v.id)
+                break
+        motor.setProperty("rate", 185)
+        while True:
+            frase = self.fila.get()
+            motor.say(frase)
+            motor.runAndWait()
+
+    def falar(self, frase: str, tempo_jogo: float | None = None, forcar: bool = False):
+        if self.bloqueado and not forcar:
+            return  # nem fala nem mostra: nada de informação durante a partida
+        prefixo = f"[{fmt_tempo(tempo_jogo)}] " if tempo_jogo is not None else ""
+        mudo = time.time() < self.mudo_ate and not forcar
+        print(prefixo + ("(mudo) " if mudo else "") + frase, flush=True)
+        if self.ativa and not mudo:
+            self.fila.put(frase)
+
+
+# ---------------------------------------------------------------------------
+# Comandos de voz (offline, Vosk)
+# ---------------------------------------------------------------------------
+class OuvidoComandos:
+    """Escuta o microfone e coloca comandos reconhecidos numa fila.
+
+    Usa um vocabulário fechado (só as frases de FRASES_COMANDO), o que deixa
+    o reconhecimento rápido e evita disparar com conversa normal.
+    """
+
+    def __init__(self):
+        self.fila: "queue.Queue[str]" = queue.Queue()
+        self.ativo = False
+        try:
+            import sounddevice  # noqa: F401
+            import vosk  # noqa: F401
+        except ImportError:
+            print("(Comandos de voz desligados: rode  python -m pip install vosk sounddevice)")
+            return
+        if not self._garantir_modelo():
+            return
+        self.ativo = True
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _garantir_modelo(self) -> bool:
+        if PASTA_MODELO_VOZ.exists() and any(PASTA_MODELO_VOZ.iterdir()):
+            return True
+        import io
+        import urllib.request
+        import zipfile
+        print("Baixando modelo de voz em português (~30 MB, só na primeira vez)...")
+        try:
+            with urllib.request.urlopen(URL_MODELO_VOZ, timeout=120) as r:
+                dados = r.read()
+            with zipfile.ZipFile(io.BytesIO(dados)) as z:
+                z.extractall(PASTA_MODELO_VOZ)
+            return True
+        except Exception as e:  # noqa: BLE001
+            print(f"(Não consegui baixar o modelo de voz: {e}. Comandos de voz desligados.)")
+            return False
+
+    def _loop(self):
+        import sounddevice as sd
+        import vosk
+        vosk.SetLogLevel(-1)
+        pasta = next(p for p in PASTA_MODELO_VOZ.iterdir() if p.is_dir())
+        modelo = vosk.Model(str(pasta))
+        gramatica = json.dumps(list(FRASES_COMANDO) + ["[unk]"], ensure_ascii=False)
+        rec = vosk.KaldiRecognizer(modelo, 16000, gramatica)
+        audio: "queue.Queue[bytes]" = queue.Queue()
+
+        def callback(indata, frames, tempo, status):
+            audio.put(bytes(indata))
+
+        try:
+            with sd.RawInputStream(samplerate=16000, blocksize=8000, dtype="int16",
+                                   channels=1, callback=callback):
+                print('Comandos de voz ativos. Diga "coach itens", "coach silêncio", '
+                      '"coach volta" ou "coach anota".')
+                while True:
+                    if rec.AcceptWaveform(audio.get()):
+                        texto = json.loads(rec.Result()).get("text", "").strip()
+                        if texto in FRASES_COMANDO:
+                            self.fila.put(FRASES_COMANDO[texto])
+        except Exception as e:  # noqa: BLE001
+            print(f"(Erro no microfone: {e}. Comandos de voz desligados.)")
+            self.ativo = False
+
+    def pegar(self) -> list[str]:
+        cmds = []
+        while not self.fila.empty():
+            cmds.append(self.fila.get())
+        return cmds
+
+
+# ---------------------------------------------------------------------------
+# Utilidades
+# ---------------------------------------------------------------------------
+def fmt_tempo(seg: float | None) -> str:
+    if seg is None:
+        return "--:--"
+    return f"{int(seg // 60):02d}:{int(seg % 60):02d}"
+
+
+def parse_mmss(txt: str) -> int:
+    m, s = txt.split(":")
+    return int(m) * 60 + int(s)
+
+
+def ler_jogo(sessao: requests.Session) -> dict | None:
+    try:
+        r = sessao.get(API, timeout=1.5, verify=False)
+        if r.status_code == 200:
+            return r.json()
+    except (requests.RequestException, ValueError):
+        pass
+    return None
+
+
+VERSAO_CACHE = 3  # aumente quando o formato do cache mudar
+
+
+def _versao_ddragon() -> str:
+    return requests.get(f"{DDRAGON}/api/versions.json", timeout=5).json()[0]
+
+
+def _com_cache(arquivo: Path, construir) -> dict:
+    """Baixa dados do Data Dragon uma vez por patch e guarda em cache local."""
+    try:
+        versao = _versao_ddragon()
+        if arquivo.exists():
+            cache = json.loads(arquivo.read_text(encoding="utf-8"))
+            if cache.get("versao") == versao and cache.get("formato") == VERSAO_CACHE:
+                return cache["dados"]
+        dados = construir(versao)
+        arquivo.write_text(json.dumps({"versao": versao, "formato": VERSAO_CACHE,
+                                       "dados": dados}, ensure_ascii=False), encoding="utf-8")
+        return dados
+    except (requests.RequestException, ValueError, KeyError, IndexError):
+        if arquivo.exists():
+            cache = json.loads(arquivo.read_text(encoding="utf-8"))
+            if cache.get("formato") == VERSAO_CACHE:
+                return cache["dados"]
+        return {}
+
+
+def carregar_campeoes() -> dict:
+    """Dados públicos dos campeões (Data Dragon oficial da Riot), com cache local.
+
+    Retorna {id: {"name", "key", "tags", "info"}}. Sem internet nem cache: {}.
+    """
+    def construir(versao):
+        dados = requests.get(
+            f"{DDRAGON}/cdn/{versao}/data/pt_BR/champion.json", timeout=15).json()["data"]
+        return {k: {"name": v["name"], "key": int(v["key"]), "tags": v["tags"],
+                    "info": v["info"]} for k, v in dados.items()}
+    return _com_cache(CACHE_CAMPEOES, construir)
+
+
+CACHE_ITENS = BASE / "itens_cache.json"
+
+
+def carregar_itens() -> dict:
+    """{id(str): {"nome": pt-BR, "en": inglês, "preco": total, "de": [componentes]}}."""
+    def construir(versao):
+        base = f"{DDRAGON}/cdn/{versao}/data"
+        pt = requests.get(f"{base}/pt_BR/item.json", timeout=15).json()["data"]
+        en = requests.get(f"{base}/en_US/item.json", timeout=15).json()["data"]
+        return {k: {"nome": v["name"], "en": en.get(k, {}).get("name", v["name"]),
+                    "preco": v["gold"]["total"], "de": v.get("from", []),
+                    # aparece na lista do editor de builds (itens da loja de Summoner's Rift)
+                    "loja": bool(v["gold"].get("purchasable") and v.get("maps", {}).get("11")
+                                 and len(k) <= 4 and v["gold"]["total"] >= 700)}
+                for k, v in pt.items()}
+    return _com_cache(CACHE_ITENS, construir)
+
+
+class Itens:
+    """Consulta de itens: nome em português, preço e quanto falta para comprar."""
+
+    def __init__(self, dados: dict):
+        self.dados = dados
+        self.por_nome: dict[str, str] = {}
+        # prefere o id "normal" (4 dígitos) quando o mesmo nome existe em outros modos
+        for k in sorted(dados, key=lambda k: (len(k), k)):
+            self.por_nome.setdefault(dados[k]["en"], k)
+
+    def __bool__(self):
+        return bool(self.dados)
+
+    def id(self, nome_en: str) -> str | None:
+        return self.por_nome.get(nome_en)
+
+    def nomes_loja(self) -> list[str]:
+        """Nomes em português dos itens da loja, em ordem alfabética."""
+        return sorted({d["nome"] for d in self.dados.values() if d.get("loja")})
+
+    def en_de_pt(self, nome_pt: str) -> str:
+        """Nome em inglês (usado nas builds) a partir do nome em português."""
+        for k in sorted(self.dados, key=lambda k: (len(k), k)):
+            if self.dados[k]["nome"] == nome_pt:
+                return self.dados[k]["en"]
+        return nome_pt
+
+    def nome_pt(self, nome_en: str) -> str:
+        i = self.id(nome_en)
+        return self.dados[i]["nome"] if i else nome_en
+
+    def preco(self, item_id) -> int:
+        return self.dados.get(str(item_id), {}).get("preco", 0)
+
+    def custo_restante(self, item_id: str, inventario: list) -> int:
+        """Preço do item menos o valor dos componentes que você já tem."""
+        estoque = [str(i) for i in inventario]
+
+        def valor_possuido(iid: str) -> int:
+            total = 0
+            for comp in self.dados.get(iid, {}).get("de", []):
+                if comp in estoque:
+                    estoque.remove(comp)
+                    total += self.preco(comp)
+                else:
+                    total += valor_possuido(comp)
+            return total
+
+        return max(self.preco(item_id) - valor_possuido(item_id), 0)
+
+
+def id_campeao(jogador: dict, campeoes: dict) -> str:
+    """Converte o jogador da API ao vivo no id do Data Dragon (ex.: Wukong -> MonkeyKing)."""
+    raw = jogador.get("rawChampionName", "")
+    if "displayname_" in raw:
+        cid = raw.split("displayname_")[-1]
+        if cid in campeoes or not campeoes:
+            return cid
+    nome = jogador.get("championName", "")
+    for cid, c in campeoes.items():
+        if c["name"] == nome:
+            return cid
+    return nome.replace(" ", "").replace("'", "").replace(".", "")
+
+
+def analisar_inimigos(ids: list[str], campeoes: dict) -> list[str]:
+    """Retorna as chaves de ajuste que se aplicam ('ap', 'ad', 'cura', ...)."""
+    if not campeoes:
+        return []
+    ap = ad = tanques = assassinos = cc = 0
+    cura = False
+    for cid in ids:
+        c = campeoes.get(cid)
+        if not c:
+            continue
+        tags, info = c["tags"], c["info"]
+        if tags[0] != "Support" or info["magic"] >= 8 or info["attack"] >= 8:
+            if info["magic"] > info["attack"]:
+                ap += 1
+            else:
+                ad += 1
+        if "Tank" in tags:
+            tanques += 1
+            cc += 1
+        elif cid in MUITO_CC or c["name"] in MUITO_CC:
+            cc += 1
+        if tags[0] == "Assassin":
+            assassinos += 1
+        if cid in CURA_FORTE:
+            cura = True
+    ajustes = []
+    if ap >= 3:
+        ajustes.append("ap")
+    if ad >= 3:
+        ajustes.append("ad")
+    if cura:
+        ajustes.append("cura")
+    if tanques >= 2:
+        ajustes.append("tanques")
+    if cc >= 3:
+        ajustes.append("cc")
+    if assassinos >= 1:
+        ajustes.append("assassinos")
+    return ajustes
+
+
+def nomes_possiveis(jogador: dict) -> set[str]:
+    """Os eventos usam às vezes o nome curto, às vezes o Riot ID completo."""
+    nomes = set()
+    for chave in ("riotId", "summonerName", "riotIdGameName"):
+        valor = jogador.get(chave)
+        if valor:
+            nomes.add(valor)
+            nomes.add(valor.split("#")[0])
+    return nomes
+
+
+def ler_partidas() -> list[dict]:
+    """Todos os resumos salvos em ./partidas/, do mais antigo para o mais novo."""
+    partidas = []
+    for arq in sorted(PASTA_PARTIDAS.glob("*.json")):
+        try:
+            partidas.append(json.loads(arq.read_text(encoding="utf-8")))
+        except (ValueError, OSError):
+            pass
+    partidas.sort(key=lambda r: r.get("data", ""))
+    return partidas
+
+
+def avisos_de_sessao(agora: datetime | None = None) -> list[str]:
+    """Fatos sobre a sua sessão: sequência de derrotas e jogo de madrugada."""
+    agora = agora or datetime.now()
+    avisos = []
+    hoje = [r for r in ler_partidas()
+            if (agora - datetime.fromisoformat(r["data"])).total_seconds() < 12 * 3600]
+    derrotas = 0
+    for r in reversed(hoje):
+        if r.get("resultado") == "derrota":
+            derrotas += 1
+        else:
+            break
+    if derrotas >= CONFIG["avisar_sequencia_derrotas"]:
+        avisos.append(f"São {derrotas} derrotas seguidas nesta sessão. "
+                      "Talvez seja uma boa hora para uma pausa.")
+    ini, fim = CONFIG["madrugada_entre"]
+    if ini <= agora.hour < fim:
+        madrugada = [r for r in ler_partidas() if r.get("resultado")
+                     and ini <= datetime.fromisoformat(r["data"]).hour < fim]
+        if len(madrugada) >= 5:
+            v = sum(r["resultado"] == "vitória" for r in madrugada)
+            avisos.append(f"Já passou da {ini} da manhã. De madrugada você venceu "
+                          f"{v} de {len(madrugada)} partidas.")
+        else:
+            avisos.append(f"Já passou da {ini} da manhã. No seu histórico, "
+                          "as partidas de madrugada rendem menos.")
+    return avisos
+
+
+# ---------------------------------------------------------------------------
+# Coach
+# ---------------------------------------------------------------------------
+class Coach:
+    def __init__(self, voz: Voz, campeoes: dict | None = None, itens: "Itens | None" = None):
+        self.voz = voz
+        self.campeoes = campeoes or {}
+        self.itens = itens or Itens({})
+        self.reset()
+
+    def reset(self):
+        self.voz.bloqueado = False
+        self.em_partida = False
+        self.eu = None            # dados do meu campeão em allPlayers
+        self.meu_time = None
+        self.meus_nomes: set[str] = set()
+        self.eventos_vistos = 0
+        self.ultimo_aviso: dict[str, float] = {}
+        self.lembretes_feitos: set[str] = set()
+        self.nivel_anterior = 0
+        self.mortes: list[dict] = []
+        self.historico_kp: list[tuple[float, float]] = []
+        self.ultimo_jogo: dict | None = None
+        self.dica_build: str | None = None   # repetida no primeiro aviso de ouro
+        self.dica_build_repetida = False
+        self.cacadores_inimigos: dict[str, dict] = {}  # nome -> jogador
+        self.anotacoes: list[str] = []                 # tempos marcados com "coach anota"
+        self.texto_build: str | None = None            # build + ajustes, para "coach build"
+        self.sequencias: dict[str, int] = {}           # campeão -> abates seguidos
+        self.ja_avisou_recompensa: set[str] = set()    # campeões já avisados (zera ao morrer)
+        self.build: dict | None = None                 # build do meu campeão
+        self.avisos_item: set[str] = set()             # "perto_<id>" / "pronto_<id>" já falados
+        self.resultado: str | None = None              # "Win" / "Lose" (evento GameEnd)
+
+    # -- helpers -----------------------------------------------------------
+    def pode_avisar(self, chave: str, intervalo: float, agora: float) -> bool:
+        if agora - self.ultimo_aviso.get(chave, -1e9) >= intervalo:
+            self.ultimo_aviso[chave] = agora
+            return True
+        return False
+
+    def identificar_jogador(self, jogo: dict):
+        ativo = jogo.get("activePlayer", {})
+        nomes_ativo = nomes_possiveis(ativo)
+        for p in jogo.get("allPlayers", []):
+            if nomes_possiveis(p) & nomes_ativo:
+                self.eu = p
+                self.meu_time = p.get("team")
+                self.meus_nomes = nomes_possiveis(p) | nomes_ativo
+                return
+
+    # -- início ------------------------------------------------------------
+    def inicio_partida(self, jogo: dict):
+        self.em_partida = True
+        self.identificar_jogador(jogo)
+        if not self.eu:
+            self.voz.falar("Partida detectada, mas não identifiquei seu campeão.")
+            return
+        aliados = [p["championName"] for p in jogo["allPlayers"] if p.get("team") == self.meu_time]
+        inimigos = [p["championName"] for p in jogo["allPlayers"] if p.get("team") != self.meu_time]
+        print("\n=== Partida iniciada ===")
+        print("Seu time :", ", ".join(aliados))
+        print("Inimigos :", ", ".join(inimigos))
+        self.voz.falar(f"Partida começando. Você está de {self.eu['championName']}. Boa sorte.")
+        self.identificar_cacadores(jogo)
+        if CONFIG["analisar_composicao"]:
+            self.falar_build(jogo)
+        if CONFIG["somente_antes_e_depois"]:
+            self.voz.bloqueado = True
+            print("(Modo antes e depois: sem avisos durante a partida. "
+                  "Resumo no final.)")
+
+    def identificar_cacadores(self, jogo: dict):
+        """Caçador inimigo = quem tem Smite (visível no placar/Tab)."""
+        for p in jogo.get("allPlayers", []):
+            if p.get("team") == self.meu_time:
+                continue
+            feiticos = p.get("summonerSpells", {})
+            for f in feiticos.values():
+                raw = (f.get("rawDisplayName", "") + " " + f.get("displayName", "")).lower()
+                if "smite" in raw or "golpear" in raw:
+                    for nome in nomes_possiveis(p):
+                        self.cacadores_inimigos[nome] = p
+                    print(f"Caçador inimigo: {p['championName']}")
+                    break
+
+    def jogador_por_nome(self, nome: str) -> dict | None:
+        for p in (self.ultimo_jogo or {}).get("allPlayers", []):
+            if nome in nomes_possiveis(p):
+                return p
+        return None
+
+    def checar_cacador(self, ev: dict, t: float):
+        if not CONFIG["avisar_cacador_inimigo"] or not self.cacadores_inimigos:
+            return
+        # ignora eventos antigos (ex.: script aberto no meio da partida)
+        if t - ev.get("EventTime", t) > 10:
+            return
+        envolvidos = [ev.get("KillerName", "")] + list(ev.get("Assisters", []))
+        cacador = next((self.cacadores_inimigos[n] for n in envolvidos
+                        if n in self.cacadores_inimigos), None)
+        if not cacador:
+            return
+        nome_ev = ev.get("EventName")
+        campeao = cacador["championName"]
+        if nome_ev == "ChampionKill":
+            vitima = self.jogador_por_nome(ev.get("VictimName", ""))
+            if vitima is None:
+                return
+            lugar = POSICOES.get(vitima.get("position", ""), "")
+            frase = f"{campeao}, caçador inimigo, apareceu {lugar} no abate de {vitima['championName']}."
+        elif nome_ev == "DragonKill":
+            frase = f"{campeao}, caçador inimigo, está no dragão. Lado de baixo do mapa."
+        elif nome_ev in ("HeraldKill", "HordeKill", "BaronKill"):
+            frase = f"{campeao}, caçador inimigo, está no lado de cima do mapa."
+        elif nome_ev == "TurretKilled":
+            frase = f"{campeao}, caçador inimigo, ajudou a derrubar uma torre."
+        else:
+            return
+        if self.pode_avisar("cacador", CONFIG["intervalo_aviso_cacador_s"], t):
+            self.voz.falar(" ".join(frase.split()), t)
+
+    # -- recompensa / "Neutralizado" ---------------------------------------
+    def atualizar_sequencias(self, ev: dict):
+        if ev.get("EventName") != "ChampionKill":
+            return
+        matador = self.jogador_por_nome(ev.get("KillerName", ""))
+        vitima = self.jogador_por_nome(ev.get("VictimName", ""))
+        if vitima:
+            campeao = vitima["championName"]
+            if campeao in self.ja_avisou_recompensa and vitima.get("team") != self.meu_time:
+                self.voz.falar(f"Neutralizado! {campeao} perdeu a recompensa.")
+            self.sequencias[campeao] = 0
+            self.ja_avisou_recompensa.discard(campeao)
+        if matador:
+            c = matador["championName"]
+            self.sequencias[c] = self.sequencias.get(c, 0) + 1
+
+    def valor_itens(self, jogador: dict) -> int:
+        return sum(self.itens.preco(i.get("itemID")) * max(i.get("count", 1), 1)
+                   for i in jogador.get("items", []))
+
+    def checar_recompensa(self, jogo: dict, t: float):
+        if not CONFIG["avisar_recompensa"]:
+            return
+        jogadores = jogo.get("allPlayers", [])
+        media = (sum(self.valor_itens(p) for p in jogadores) / len(jogadores)
+                 if self.itens and jogadores else 0)
+        for p in jogadores:
+            campeao = p["championName"]
+            if campeao in self.ja_avisou_recompensa:
+                continue
+            seq = self.sequencias.get(campeao, 0)
+            vantagem = self.valor_itens(p) - media if media else 0
+            motivo = None
+            if seq >= CONFIG["sequencia_recompensa"]:
+                motivo = f"está com {seq} abates seguidos"
+            elif vantagem >= CONFIG["vantagem_itens_recompensa"]:
+                motivo = f"tem uns {round(vantagem, -2):.0f} de ouro em itens acima da média"
+            if not motivo:
+                continue
+            if not self.pode_avisar(f"recompensa_{campeao}",
+                                    CONFIG["intervalo_aviso_recompensa_s"], t):
+                continue
+            self.ja_avisou_recompensa.add(campeao)
+            if p is self.eu or nomes_possiveis(p) & self.meus_nomes:
+                self.voz.falar(f"Você {motivo}. Provavelmente está valendo recompensa.", t)
+            elif p.get("team") != self.meu_time:
+                self.voz.falar(f"{campeao} {motivo}. Provavelmente está valendo recompensa.", t)
+
+    def texto_ajuste(self, chave: str, build: dict) -> str | None:
+        if chave not in build["ajustes"]:
+            return None
+        desc, itens = build["ajustes"][chave]
+        nomes = [self.itens.nome_pt(i) for i in itens]
+        if not nomes:
+            return f"Time inimigo com {desc}."
+        rotulo = "Opção" if len(nomes) == 1 else "Opções"
+        return f"Time inimigo com {desc}. {rotulo}: {' e '.join(nomes)}."
+
+    def falar_build(self, jogo: dict):
+        meu_id = id_campeao(self.eu, self.campeoes)
+        build = BUILDS.get(meu_id)
+        if not build:
+            print(f"(Sem build cadastrada para {meu_id}. Adicione na aba Builds do app.)")
+            return
+        self.build = build
+        lista = ", ".join(self.itens.nome_pt(i) for i in build["itens"])
+        self.voz.falar(f"Build: {lista}.")
+        ids_inimigos = [id_campeao(p, self.campeoes) for p in jogo["allPlayers"]
+                        if p.get("team") != self.meu_time]
+        ajustes = [txt for k in analisar_inimigos(ids_inimigos, self.campeoes)
+                   if (txt := self.texto_ajuste(k, build))]
+        if not self.campeoes:
+            print("(Sem dados de campeões: análise da composição inimiga desativada.)")
+        for frase in ajustes:
+            self.voz.falar(frase)
+        if ajustes:
+            self.dica_build = " ".join(ajustes)
+        self.texto_build = " ".join([f"Build: {lista}."] + ajustes)
+
+    # -- ouro para o próximo item ------------------------------------------
+    def checar_proximo_item(self, ativo: dict, t: float):
+        if not CONFIG["avisar_proximo_item"] or not self.build or not self.itens:
+            return
+        if self.eu.get("isDead"):
+            return
+        inventario = [i.get("itemID") for i in self.eu.get("items", [])]
+        possuidos = {str(i) for i in inventario}
+        proximo = None
+        for nome in self.build["itens"]:
+            iid = self.itens.id(nome)
+            if iid and iid not in possuidos:
+                proximo = (nome, iid)
+                break
+        if not proximo:
+            return
+        nome, iid = proximo
+        falta = self.itens.custo_restante(iid, inventario) - ativo.get("currentGold", 0)
+        nome_pt = self.itens.nome_pt(nome)
+        if falta <= 0 and f"pronto_{iid}" not in self.avisos_item:
+            self.avisos_item.add(f"pronto_{iid}")
+            self.avisos_item.add(f"perto_{iid}")
+            self.voz.falar(f"Ouro suficiente para {nome_pt}.", t)
+            if self.dica_build and not self.dica_build_repetida:
+                self.dica_build_repetida = True
+                self.voz.falar("Sobre os itens: " + self.dica_build, t)
+        elif 0 < falta <= CONFIG["ouro_perto_do_item"] and f"perto_{iid}" not in self.avisos_item:
+            self.avisos_item.add(f"perto_{iid}")
+            self.voz.falar(f"Faltam {int(round(falta, -1))} de ouro para {nome_pt}.", t)
+
+    # -- CS por minuto -----------------------------------------------------
+    def checar_cs(self, t: float):
+        if not CONFIG["avisar_cs_baixo"] or not self.build:
+            return
+        funcao = self.build.get("funcao")
+        minimo = CONFIG["cs_minimo"].get(funcao)
+        if not minimo or t < CONFIG["cs_checar_apos_min"] * 60:
+            return
+        cs_min = self.eu["scores"].get("creepScore", 0) / (t / 60)
+        if cs_min < minimo and self.pode_avisar("cs", CONFIG["intervalo_aviso_cs_s"], t):
+            self.voz.falar(f"Seu CS por minuto está em {cs_min:.1f}.".replace(".", ",", 1), t)
+
+    # -- comandos de voz ---------------------------------------------------
+    def executar_comando(self, cmd: str):
+        t = (self.ultimo_jogo or {}).get("gameData", {}).get("gameTime")
+        if cmd == "build":
+            self.voz.falar(self.texto_build or "Não tenho build cadastrada para esse campeão.",
+                           t, forcar=True)
+        elif cmd == "silencio":
+            minutos = CONFIG["minutos_silencio"]
+            self.voz.falar(f"Ok, silêncio por {minutos} minutos.", t, forcar=True)
+            self.voz.mudo_ate = time.time() + minutos * 60
+        elif cmd == "volta":
+            self.voz.mudo_ate = 0
+            self.voz.falar("Voltei.", t)
+        elif cmd == "anota":
+            if not self.em_partida or t is None:
+                return
+            self.anotacoes.append(fmt_tempo(t))
+            self.voz.falar("Anotado.", t, forcar=True)
+
+    # -- loop principal ----------------------------------------------------
+    def processar(self, jogo: dict):
+        if not self.em_partida:
+            self.inicio_partida(jogo)
+
+        self.ultimo_jogo = jogo
+        t = jogo.get("gameData", {}).get("gameTime", 0.0)
+        ativo = jogo.get("activePlayer", {})
+
+        # atualiza meu registro em allPlayers
+        for p in jogo.get("allPlayers", []):
+            if nomes_possiveis(p) & self.meus_nomes:
+                self.eu = p
+        if not self.eu:
+            return
+
+        self.checar_eventos(jogo, t)
+        self.checar_ouro(ativo, t)
+        self.checar_kp(jogo, t)
+        self.checar_sentinela(t)
+        self.checar_lembretes_tempo(t)
+        self.checar_nivel(ativo, t)
+        self.checar_recompensa(jogo, t)
+        self.checar_proximo_item(ativo, t)
+        self.checar_cs(t)
+
+    def checar_eventos(self, jogo: dict, t: float):
+        eventos = jogo.get("events", {}).get("Events", [])
+        novos = eventos[self.eventos_vistos:]
+        self.eventos_vistos = len(eventos)
+        for ev in novos:
+            self.checar_cacador(ev, t)
+            self.atualizar_sequencias(ev)
+            nome = ev.get("EventName")
+            if nome == "ChampionKill" and ev.get("VictimName") in self.meus_nomes:
+                tempo = ev.get("EventTime", t)
+                self.mortes.append({"tempo": fmt_tempo(tempo), "matador": ev.get("KillerName")})
+                if tempo < 14 * 60:
+                    self.voz.falar(
+                        "Morte antes dos 14 minutos. Ficou anotada no resumo.", t)
+                else:
+                    self.voz.falar("Você morreu.", t)
+            elif nome == "GameEnd":
+                self.voz.bloqueado = False
+                self.resultado = ev.get("Result")
+
+    def checar_ouro(self, ativo: dict, t: float):
+        ouro = ativo.get("currentGold", 0)
+        # com build cadastrada, o aviso de "próximo item" substitui este
+        if self.build and CONFIG["avisar_proximo_item"] and self.itens:
+            return
+        if (ouro >= CONFIG["ouro_para_recall"] and not self.eu.get("isDead")
+                and self.pode_avisar("ouro", CONFIG["intervalo_aviso_ouro_s"], t)):
+            self.voz.falar(f"Você tem {int(ouro)} de ouro.", t)
+            if self.dica_build and not self.dica_build_repetida:
+                self.dica_build_repetida = True
+                self.voz.falar("Sobre os itens: " + self.dica_build, t)
+
+    def checar_kp(self, jogo: dict, t: float):
+        if t < CONFIG["kp_checar_apos_min"] * 60:
+            return
+        abates_time = sum(p["scores"]["kills"] for p in jogo["allPlayers"]
+                          if p.get("team") == self.meu_time)
+        if abates_time < 3:
+            return
+        s = self.eu["scores"]
+        kp = (s["kills"] + s["assists"]) / abates_time
+        self.historico_kp.append((t, kp))
+        if kp < CONFIG["kp_minimo"] and self.pode_avisar("kp", CONFIG["intervalo_aviso_kp_s"], t):
+            self.voz.falar(
+                f"Sua participação em abates está em {round(kp * 100)} por cento.", t)
+
+    def checar_sentinela(self, t: float):
+        if not CONFIG["lembrar_sentinela_controle"] or t < 3 * 60:
+            return
+        tem = any(i.get("itemID") == ID_SENTINELA_CONTROLE for i in self.eu.get("items", []))
+        if not tem and self.pode_avisar("sentinela", CONFIG["intervalo_aviso_sentinela_s"], t):
+            self.voz.falar("Você está sem sentinela de controle.", t)
+
+    def checar_lembretes_tempo(self, t: float):
+        for mmss, frase in CONFIG["lembretes_tempo"].items():
+            alvo = parse_mmss(mmss)
+            if mmss not in self.lembretes_feitos and alvo <= t < alvo + 10:
+                self.lembretes_feitos.add(mmss)
+                self.voz.falar(frase, t)
+
+    def checar_nivel(self, ativo: dict, t: float):
+        nivel = ativo.get("level", 0)
+        if CONFIG["avisar_niveis_ult"] and nivel != self.nivel_anterior:
+            if nivel == 6:
+                self.voz.falar("Nível 6. Ultimate disponível.", t)
+            elif nivel in (11, 16):
+                self.voz.falar(f"Nível {nivel}. Ultimate mais forte.", t)
+        self.nivel_anterior = nivel
+
+    # -- fim ---------------------------------------------------------------
+    def fim_partida(self):
+        if not self.em_partida or not self.ultimo_jogo or not self.eu:
+            self.reset()
+            return
+        jogo = self.ultimo_jogo
+        s = self.eu["scores"]
+        dur = jogo.get("gameData", {}).get("gameTime", 0)
+        resumo = {
+            "data": datetime.now().isoformat(timespec="seconds"),
+            "resultado": {"Win": "vitória", "Lose": "derrota"}.get(self.resultado or ""),
+            "campeao": self.eu.get("championName"),
+            "campeao_id": id_campeao(self.eu, self.campeoes),
+            "posicao": self.eu.get("position"),
+            "duracao": fmt_tempo(dur),
+            "kda": f'{s["kills"]}/{s["deaths"]}/{s["assists"]}',
+            "cs": s.get("creepScore"),
+            "cs_por_min": round(s.get("creepScore", 0) / max(dur / 60, 1), 1),
+            "placar_visao": round(s.get("wardScore", 0), 1),
+            "kp_final": (round((s["kills"] + s["assists"]) / tot, 2)
+                         if (tot := sum(p["scores"]["kills"] for p in jogo["allPlayers"]
+                                        if p.get("team") == self.meu_time)) else None),
+            "mortes": self.mortes,
+            "mortes_antes_14": sum(1 for m in self.mortes if parse_mmss(m["tempo"]) < 14 * 60),
+            "momentos_anotados": self.anotacoes,
+            "aliados": [p["championName"] for p in jogo["allPlayers"] if p.get("team") == self.meu_time],
+            "inimigos": [p["championName"] for p in jogo["allPlayers"] if p.get("team") != self.meu_time],
+        }
+        PASTA_PARTIDAS.mkdir(exist_ok=True)
+        arq = PASTA_PARTIDAS / f"{datetime.now():%Y%m%d_%H%M%S}_{resumo['campeao']}.json"
+        arq.write_text(json.dumps(resumo, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"\n=== Partida encerrada. Resumo salvo em {arq} ===")
+        self.falar_resumo(resumo, jogo)
+        self.reset()
+
+    def falar_resumo(self, resumo: dict, jogo: dict):
+        """Resumo pós-partida: só as suas próprias estatísticas."""
+        self.voz.bloqueado = False
+        abates_time = sum(p["scores"]["kills"] for p in jogo["allPlayers"]
+                          if p.get("team") == self.meu_time)
+        s = self.eu["scores"]
+        kp = min(100, round((s["kills"] + s["assists"]) / abates_time * 100)) if abates_time else None
+        partes = [f"Resumo da partida de {resumo['campeao']}. KDA {resumo['kda'].replace('/', ', ')}."]
+        if kp is not None:
+            partes.append(f"Participação em abates: {kp} por cento.")
+        partes.append(f"{resumo['mortes_antes_14']} mortes antes dos 14 minutos.")
+        partes.append(f"Placar de visão {resumo['placar_visao']:.0f}.")
+        if resumo["momentos_anotados"]:
+            partes.append("Momentos anotados: " + ", ".join(resumo["momentos_anotados"]) + ".")
+        partes += avisos_de_sessao()
+        for frase in partes:
+            self.voz.falar(frase)
+        print()
+
+
+# ---------------------------------------------------------------------------
+# Seleção de campeões (API local do cliente — LCU)
+# ---------------------------------------------------------------------------
+NOMES_FUNCAO = {"UTILITY": "suporte", "JUNGLE": "caçador", "TOP": "topo",
+                "MIDDLE": "meio", "BOTTOM": "atirador"}
+
+
+def estatisticas_pool() -> dict[str, tuple[int, int]]:
+    """Vitórias e derrotas por campeão: temporada (op.gg) + partidas registradas."""
+    stats = {c: list(vd) for c, vd in HISTORICO_BASE.items()}
+    for r in ler_partidas():
+        c = r.get("campeao_id") or r.get("campeao")
+        if c in stats and r.get("resultado"):
+            stats[c][0 if r["resultado"] == "vitória" else 1] += 1
+    return {c: (v, d) for c, (v, d) in stats.items()}
+
+
+class SelecaoCampeoes:
+    """Lê a seleção de campeões e destaca o seu pool para a função.
+
+    Usa a API local do cliente (a mesma do lobby). A Riot diz que essa API não
+    tem suporte oficial para apps de terceiros: funciona, mas pode mudar.
+    """
+
+    def __init__(self, voz: Voz, campeoes: dict):
+        self.voz = voz
+        self.por_chave = {c["key"]: cid for cid, c in campeoes.items() if "key" in c}
+        self.nomes = {cid: c["name"] for cid, c in campeoes.items()}
+        self.campeoes = campeoes
+        self.sessao: requests.Session | None = None
+        self.base = ""
+        self.reset()
+
+    def reset(self):
+        self.ativa = False
+        self.inimigos_vistos: set[str] = set()
+        self.notas_faladas: set[str] = set()
+
+    def _conectar(self) -> bool:
+        lockfile = Path(CONFIG["pasta_lol"]) / "lockfile"
+        try:
+            _, _, porta, senha, proto = lockfile.read_text().split(":")
+        except (OSError, ValueError):
+            return False
+        self.base = f"{proto}://127.0.0.1:{porta}"
+        self.sessao = requests.Session()
+        self.sessao.auth = ("riot", senha)
+        self.sessao.verify = False
+        return True
+
+    def ler(self) -> dict | None:
+        if not self.sessao and not self._conectar():
+            return None
+        try:
+            r = self.sessao.get(f"{self.base}/lol-champ-select/v1/session", timeout=1.5)
+        except requests.RequestException:
+            self.sessao = None  # cliente fechou ou reiniciou: reconecta depois
+            return None
+        return r.json() if r.status_code == 200 else None
+
+    def processar(self, sessao: dict | None):
+        if not sessao:
+            if self.ativa:
+                self.reset()
+            return
+        eu = next((p for p in sessao.get("myTeam", [])
+                   if p.get("cellId") == sessao.get("localPlayerCellId")), None)
+        if not eu:
+            return
+        funcao = (eu.get("assignedPosition") or "").upper()
+        if not self.ativa:
+            self.ativa = True
+            self.falar_pool(funcao)
+        inimigos = {self.por_chave.get(p.get("championId"))
+                    for p in sessao.get("theirTeam", []) if p.get("championId")}
+        inimigos.discard(None)
+        if inimigos - self.inimigos_vistos:
+            self.inimigos_vistos |= inimigos
+            self.falar_notas(funcao)
+
+    def falar_pool(self, funcao: str):
+        pool = POOL.get(funcao)
+        if not pool:
+            self.voz.falar("Seleção de campeões.")
+            return
+        stats = estatisticas_pool()
+        linhas = []
+        for c in sorted(pool, key=lambda c: -self._taxa(stats.get(c, (0, 0)))):
+            v, d = stats.get(c, (0, 0))
+            if v + d >= 5:
+                linhas.append(f"{self.nomes.get(c, c)} {round(100 * v / (v + d))} por cento "
+                              f"em {v + d} partidas")
+        frase = f"Seleção de campeões, você está de {NOMES_FUNCAO.get(funcao, funcao)}."
+        if linhas:
+            frase += " Seu histórico: " + "; ".join(linhas[:3]) + "."
+        self.voz.falar(frase)
+
+    @staticmethod
+    def _taxa(vd: tuple[int, int]) -> float:
+        v, d = vd
+        return (v + 1) / (v + d + 2)  # suaviza amostras pequenas
+
+    def falar_notas(self, funcao: str):
+        pool = POOL.get(funcao, [])
+        notas = []
+        engaje = sorted(self.inimigos_vistos & ENGAJE)
+        resposta = [c for c in ("Morgana", "Milio") if c in pool]
+        if engaje and resposta and "engaje" not in self.notas_faladas:
+            self.notas_faladas.add("engaje")
+            nomes = " e ".join(self.nomes.get(c, c) for c in engaje)
+            notas.append(f"Inimigo com engajamento: {nomes}. No seu pool, "
+                         f"{' e '.join(resposta)} anulam controle de grupo.")
+        mergulho = sorted(self.inimigos_vistos & MERGULHO)
+        if len(mergulho) >= 2 and "Lulu" in pool and "mergulho" not in self.notas_faladas:
+            self.notas_faladas.add("mergulho")
+            nomes = " e ".join(self.nomes.get(c, c) for c in mergulho)
+            notas.append(f"Inimigos que mergulham: {nomes}. No seu pool, "
+                         "Lulu é a que mais protege o carry.")
+        cura = sorted(c for c in self.inimigos_vistos if c in CURA_FORTE)
+        if cura and "cura" not in self.notas_faladas:
+            self.notas_faladas.add("cura")
+            nomes = " e ".join(self.nomes.get(c, c) for c in cura)
+            notas.append(f"Inimigo com muita cura: {nomes}.")
+        for n in notas:
+            self.voz.falar(n)
+
+
+# ---------------------------------------------------------------------------
+def rodar(parar: threading.Event | None = None, voz: "Voz | None" = None,
+          ouvido: "OuvidoComandos | None" = None, estado=None):
+    """Loop principal. `parar` encerra o loop; `estado(texto)` recebe o status."""
+    parar = parar or threading.Event()
+    estado = estado or (lambda texto: None)
+    voz = voz or Voz(ativa=True)
+    estado("Carregando dados dos campeões...")
+    print("Carregando dados dos campeões...")
+    if not BUILDS:
+        carregar_builds()
+    campeoes = carregar_campeoes()
+    itens = Itens(carregar_itens())
+    coach = Coach(voz, campeoes, itens)
+    selecao = SelecaoCampeoes(voz, campeoes) if campeoes else None
+    sessao = requests.Session()
+    print("Coach LoL rodando. Aguardando partida...")
+    estado("Aguardando partida")
+
+    falhas = 0
+    proxima_leitura = 0.0
+    ultimo_estado = ""
+    while not parar.is_set():
+        # comandos de voz respondem rápido (a cada 0,2 s)
+        if ouvido and ouvido.ativo and CONFIG["comandos_de_voz"]:
+            for cmd in ouvido.pegar():
+                coach.executar_comando(cmd)
+
+        if time.time() >= proxima_leitura:
+            proxima_leitura = time.time() + CONFIG["intervalo_leitura_s"]
+            jogo = ler_jogo(sessao)
+            if jogo and jogo.get("allPlayers"):
+                falhas = 0
+                coach.processar(jogo)
+                novo = (f"Em partida: {coach.eu['championName']}" if coach.eu
+                        else "Em partida")
+            else:
+                falhas += 1
+                novo = "Aguardando partida"
+                # ~10 s sem resposta depois de uma partida = partida acabou
+                if coach.em_partida and falhas >= 5:
+                    coach.fim_partida()
+                    print("Aguardando próxima partida...")
+                elif coach.em_partida:
+                    novo = ultimo_estado
+                # fora da partida: acompanha a seleção de campeões
+                if selecao and CONFIG["ajuda_selecao"] and not coach.em_partida:
+                    selecao.processar(selecao.ler())
+                    if selecao.ativa:
+                        novo = "Seleção de campeões"
+            if novo != ultimo_estado:
+                ultimo_estado = novo
+                estado(novo)
+        time.sleep(0.2)
+    if coach.em_partida:
+        coach.fim_partida()
+    estado("Parado")
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Coach LoL por voz (API oficial local)")
+    ap.add_argument("--sem-voz", action="store_true", help="só mostra os avisos no terminal")
+    ap.add_argument("--sem-microfone", action="store_true", help="desliga os comandos de voz")
+    args = ap.parse_args()
+    carregar_config()
+    voz = Voz(ativa=not args.sem_voz and CONFIG["voz_ligada"])
+    ouvido = (OuvidoComandos() if CONFIG["comandos_de_voz"] and not args.sem_microfone
+              else None)
+    print("(Ctrl+C para sair)")
+    rodar(voz=voz, ouvido=ouvido)
+
+
+carregar_builds()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nAté a próxima!")
+

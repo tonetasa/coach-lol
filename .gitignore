@@ -1,0 +1,18 @@
+# build
+build/
+dist/
+instalador/
+*.spec
+version_info.txt
+__pycache__/
+
+# dados locais do usuário (ficam em %APPDATA%\CoachLoL no app instalado)
+partidas/
+modelo_voz/
+config_coach.json
+campeoes_cache.json
+itens_cache.json
+builds_baixadas.json
+builds_usuario.json
+relatorio_lol.html
+coach.log*
