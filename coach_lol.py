@@ -108,7 +108,6 @@ CONFIG = {
     # patch atual e edite aqui; são só lembretes de relógio, como olhar o
     # cronômetro do jogo.
     "lembretes_tempo": {
-        "4:30": "Primeiro dragão nasce em breve.",
         "13:30": "As placas das torres caem aos 14 minutos.",
         "19:30": "Vinte minutos de jogo.",
     },
@@ -122,6 +121,9 @@ CONFIG = {
     # Avisa quando o caçador inimigo (quem tem Smite) aparece no histórico de
     # abates/objetivos — a mesma informação do canto da tela.
     "avisar_cacador_inimigo": True,
+    # Objetivos neutros: avisa 1 minuto antes de nascer. Só usa os tempos padrão
+    # e os abates que o jogo anuncia para todos (nada de campos da selva).
+    "avisar_objetivos": True,
     "intervalo_aviso_cacador_s": 15,
 
     # Recompensa ("Neutralizado"): estimativa por sequência de abates e por
@@ -169,6 +171,8 @@ CONFIG = {
     # Voz do Windows usada nos avisos (vazio = primeira voz em português)
     "voz_windows": "",
     "velocidade_voz": 185,
+    "volume_voz": 100,           # 10 a 100 ("Quíron mais alto" / "mais baixo")
+    "modo_menos": False,         # "Quíron menos": só os avisos importantes
 
     # Comandos de voz (reconhecimento offline com Vosk). Diga a palavra de
     # chamada + comando, por exemplo "Quíron itens":
@@ -351,6 +355,14 @@ COMANDOS = {
     "silêncio": "silencio", "cala a boca": "silencio",
     "volta": "volta", "pode falar": "volta",
     "anota": "anota", "marca": "anota",
+    "placar": "placar", "como está": "placar",
+    "farm": "farm",
+    "ameaça": "ameaca",
+    "rota": "rota",
+    "plano": "plano",
+    "repete": "repete", "fala de novo": "repete",
+    "mais alto": "mais_alto", "mais baixo": "mais_baixo",
+    "menos": "menos",
 }
 # O dicionário do modelo de voz não tem "quíron". Estas sequências de palavras
 # que ele conhece soam igual ("qui-rom") e são aceitas como a palavra de chamada.
@@ -421,7 +433,9 @@ def achar_comando(texto: str, frases: dict[str, str]) -> str | None:
 
 def exemplos_chamada(nome: str | None = None) -> str:
     nome = (nome if nome is not None else CONFIG.get("palavra_chamada", "Quíron")).strip()
-    return ", ".join(f"“{nome} {c}”" for c in ("itens", "silêncio", "volta", "anota"))
+    return ", ".join(f"“{nome} {c}”" for c in ("itens", "placar", "farm", "ameaça", "rota",
+                                                   "plano", "repete", "menos", "silêncio",
+                                                   "volta", "anota", "mais alto", "mais baixo"))
 
 
 def garantir_modelo_voz() -> bool:
@@ -637,6 +651,7 @@ class Voz:
 
     def __init__(self, ativa: bool):
         self.mudo_ate = 0.0   # time.time() até quando fica em silêncio
+        self.ultima_frase = ""
         self.bloqueado = False  # modo "antes e depois": sem avisos durante a partida
         self.fila: "queue.Queue[str]" = queue.Queue()
         self._thread: threading.Thread | None = None
@@ -677,9 +692,11 @@ class Voz:
         usando = (None, None)
         while True:
             frase = self.fila.get()
-            escolha = (CONFIG.get("voz_windows", ""), CONFIG.get("velocidade_voz", 185))
-            if escolha != usando:  # voz ou velocidade mudou nas configurações
+            escolha = (CONFIG.get("voz_windows", ""), CONFIG.get("velocidade_voz", 185),
+                       CONFIG.get("volume_voz", 100))
+            if escolha != usando:  # voz, velocidade ou volume mudou
                 usando = escolha
+                sapi.Volume = max(0, min(100, int(escolha[2])))
                 token = _token_voz(sapi, escolha[0])
                 if token is not None:
                     try:
@@ -697,16 +714,24 @@ class Voz:
         while True:
             frase = self.fila.get()
             motor.setProperty("rate", CONFIG.get("velocidade_voz", 185))
+            motor.setProperty("volume", CONFIG.get("volume_voz", 100) / 100)
             motor.say(frase)
             motor.runAndWait()
 
-    def falar(self, frase: str, tempo_jogo: float | None = None, forcar: bool = False):
+    def falar(self, frase: str, tempo_jogo: float | None = None, forcar: bool = False,
+              extra: bool = False, guardar: bool = True):
+        """extra=True: aviso secundário, calado no modo "Quíron menos".
+        guardar=False: resposta de comando, não vira a frase do "Quíron repete"."""
         if self.bloqueado and not forcar:
             return  # nem fala nem mostra: nada de informação durante a partida
         prefixo = f"[{fmt_tempo(tempo_jogo)}] " if tempo_jogo is not None else ""
         mudo = time.time() < self.mudo_ate and not forcar
-        print(prefixo + ("(mudo) " if mudo else "") + frase, flush=True)
-        if self.ativa and not mudo:
+        menos = extra and CONFIG.get("modo_menos") and not forcar
+        marca = "(mudo) " if mudo else "(menos) " if menos else ""
+        print(prefixo + marca + frase, flush=True)
+        if guardar and not mudo and not menos:
+            self.ultima_frase = frase
+        if self.ativa and not mudo and not menos:
             self.fila.put(frase)
 
 
@@ -1238,6 +1263,23 @@ def avisos_de_sessao(agora: datetime | None = None) -> list[str]:
 # ---------------------------------------------------------------------------
 # Coach
 # ---------------------------------------------------------------------------
+# Tempos padrão de Summoner's Rift (patch 26.20). Se a Riot mudar, ajuste aqui.
+OBJETIVOS_INICIO = {"dragão": 5 * 60, "vastilarvas": 8 * 60, "arauto": 15 * 60,
+                    "barão": 20 * 60}
+RENASCE = {"dragão": 5 * 60, "dragão ancião": 6 * 60, "barão": 6 * 60}
+FRASE_OBJETIVO = {"dragão": "O dragão nasce em 1 minuto.",
+                  "dragão ancião": "O dragão ancião nasce em 1 minuto.",
+                  "vastilarvas": "As vastilarvas nascem em 1 minuto.",
+                  "arauto": "O arauto nasce em 1 minuto.",
+                  "barão": "O barão nasce em 1 minuto."}
+NOME_FUNCAO = {"TOP": "topo", "JUNGLE": "caçador", "MIDDLE": "meio", "BOTTOM": "atirador",
+               "UTILITY": "suporte"}
+
+
+def _milhar(n: float) -> str:
+    return f"{int(round(n, -2)):,}".replace(",", ".")
+
+
 class Coach:
     def __init__(self, voz: Voz, campeoes: dict | None = None, itens: "Itens | None" = None):
         self.voz = voz
@@ -1271,6 +1313,10 @@ class Coach:
         self.diferenca_ouro = 0                        # meu time - inimigo (itens)
         self.faixa_ouro = 0
         self.plano_texto: list[str] = []
+        # objetivos neutros: nome -> tempo de jogo em que nasce (None = não volta)
+        self.objetivos = dict(OBJETIVOS_INICIO)
+        self.objetivos_avisados: set[tuple] = set()
+        self.dragoes: dict[str, int] = {}   # time -> dragões elementais
 
     # -- helpers -----------------------------------------------------------
     def pode_avisar(self, chave: str, intervalo: float, agora: float) -> bool:
@@ -1370,7 +1416,7 @@ class Coach:
         if vitima:
             campeao = vitima["championName"]
             if campeao in self.ja_avisou_recompensa and vitima.get("team") != self.meu_time:
-                self.voz.falar(f"Neutralizado! {campeao} perdeu a recompensa.")
+                self.voz.falar(f"Neutralizado! {campeao} perdeu a recompensa.", extra=True)
             self.sequencias[campeao] = 0
             self.ja_avisou_recompensa.discard(campeao)
         if matador:
@@ -1405,9 +1451,9 @@ class Coach:
                 continue
             self.ja_avisou_recompensa.add(campeao)
             if p is self.eu or nomes_possiveis(p) & self.meus_nomes:
-                self.voz.falar(f"Você {motivo}. Provavelmente está valendo recompensa.", t)
+                self.voz.falar(f"Você {motivo}. Provavelmente está valendo recompensa.", t, extra=True)
             elif p.get("team") != self.meu_time:
-                self.voz.falar(f"{campeao} {motivo}. Provavelmente está valendo recompensa.", t)
+                self.voz.falar(f"{campeao} {motivo}. Provavelmente está valendo recompensa.", t, extra=True)
 
     def texto_ajuste(self, chave: str, build: dict) -> str | None:
         if chave not in build["ajustes"]:
@@ -1477,10 +1523,10 @@ class Coach:
             self.faixa_ouro = faixa
             valor = abs(round(self.diferenca_ouro, -2))
             if faixa == 0:
-                self.voz.falar("Ouro em itens equilibrado entre os times.", t)
+                self.voz.falar("Ouro em itens equilibrado entre os times.", t, extra=True)
             else:
                 lado = "à frente" if faixa > 0 else "atrás"
-                self.voz.falar(f"Seu time está cerca de {valor:.0f} de ouro {lado} em itens.", t)
+                self.voz.falar(f"Seu time está cerca de {valor:.0f} de ouro {lado} em itens.", t, extra=True)
 
     # -- ouro para o próximo item ------------------------------------------
     def checar_proximo_item(self, ativo: dict, t: float):
@@ -1522,26 +1568,177 @@ class Coach:
             return
         cs_min = self.eu["scores"].get("creepScore", 0) / (t / 60)
         if cs_min < minimo and self.pode_avisar("cs", CONFIG["intervalo_aviso_cs_s"], t):
-            self.voz.falar(f"Seu CS por minuto está em {cs_min:.1f}.".replace(".", ",", 1), t)
+            self.voz.falar(f"Seu CS por minuto está em {cs_min:.1f}.".replace(".", ",", 1), t, extra=True)
+
+    # -- objetivos neutros -------------------------------------------------
+    def objetivo_morto(self, ev: dict):
+        """Atualiza quando o objetivo volta, a partir do abate anunciado no jogo."""
+        tempo = ev.get("EventTime", 0)
+        nome = ev.get("EventName")
+        if nome == "BaronKill":
+            self.objetivos["barão"] = tempo + RENASCE["barão"]
+        elif nome == "HeraldKill":
+            self.objetivos["arauto"] = None
+        elif nome == "DragonKill":
+            if (ev.get("DragonType") or "").lower() == "elder":
+                self.objetivos["dragão ancião"] = tempo + RENASCE["dragão ancião"]
+                return
+            matador = self.jogador_por_nome(ev.get("KillerName", ""))
+            time_ = (matador or {}).get("team", "?")
+            self.dragoes[time_] = self.dragoes.get(time_, 0) + 1
+            if self.dragoes[time_] >= 4:   # alma do dragão: depois vem o ancião
+                self.objetivos["dragão"] = None
+                self.objetivos["dragão ancião"] = tempo + RENASCE["dragão ancião"]
+            else:
+                self.objetivos["dragão"] = tempo + RENASCE["dragão"]
+
+    def checar_objetivos(self, jogo: dict, t: float):
+        dados = jogo.get("gameData", {})
+        if (not CONFIG.get("avisar_objetivos") or dados.get("gameMode") != "CLASSIC"
+                or dados.get("mapNumber", 11) != 11):
+            return  # tempos diferentes em outros modos (ARAM, Swiftplay...)
+        for obj, nasce in self.objetivos.items():
+            if nasce is None:
+                continue
+            chave = (obj, round(nasce))
+            if nasce - 60 <= t < nasce - 45 and chave not in self.objetivos_avisados:
+                self.objetivos_avisados.add(chave)
+                self.voz.falar(FRASE_OBJETIVO[obj], t)
+
+    # -- respostas dos comandos de voz --------------------------------------
+    def _times(self):
+        jogo = self.ultimo_jogo or {}
+        meus = [p for p in jogo.get("allPlayers", []) if p.get("team") == self.meu_time]
+        deles = [p for p in jogo.get("allPlayers", []) if p.get("team") != self.meu_time]
+        return meus, deles
+
+    def texto_placar(self) -> str:
+        meus, deles = self._times()
+        if not meus:
+            return "Ainda não estou numa partida."
+        ab_m = sum(p["scores"]["kills"] for p in meus)
+        ab_d = sum(p["scores"]["kills"] for p in deles)
+        # torres: "Turret_T1_..." é torre do time azul (ORDER); quem derruba é o outro
+        torres = {"ORDER": 0, "CHAOS": 0}
+        for ev in (self.ultimo_jogo or {}).get("events", {}).get("Events", []):
+            if ev.get("EventName") == "TurretKilled":
+                dono = "ORDER" if "_T1_" in ev.get("TurretKilled", "") else "CHAOS"
+                torres["CHAOS" if dono == "ORDER" else "ORDER"] += 1
+        inimigo = "CHAOS" if self.meu_time == "ORDER" else "ORDER"
+        partes = [f"Abates {ab_m} a {ab_d}.",
+                  f"Torres {torres.get(self.meu_time, 0)} a {torres[inimigo]}."]
+        dr_m, dr_d = self.dragoes.get(self.meu_time, 0), self.dragoes.get(inimigo, 0)
+        if dr_m or dr_d:
+            partes.append(f"Dragões {dr_m} a {dr_d}.")
+        if self.itens:
+            dif = sum(map(self.valor_itens, meus)) - sum(map(self.valor_itens, deles))
+            if abs(dif) < 500:
+                partes.append("Ouro em itens equilibrado.")
+            else:
+                partes.append(f"Seu time tem {_milhar(abs(dif))} de ouro "
+                              f"{'a mais' if dif > 0 else 'a menos'} em itens.")
+        return " ".join(partes)
+
+    def texto_farm(self, t: float | None) -> str:
+        if not self.eu or not t:
+            return "Ainda não estou numa partida."
+        cs = self.eu["scores"].get("creepScore", 0)
+        por_min = cs / max(t / 60, 1)
+        frase = f"Você tem {cs} de CS, {por_min:.1f} por minuto.".replace(".", ",", 1)
+        funcao = (self.build or {}).get("funcao") or self.eu.get("position")
+        meta = CONFIG["cs_minimo"].get(funcao)
+        if meta:
+            frase += (f" A meta para {NOME_FUNCAO.get(funcao, 'sua função')} é "
+                      f"{meta:.1f}.".replace(".", ",", 1))
+        return frase
+
+    def _forca(self, p: dict) -> float:
+        s = p.get("scores", {})
+        return (self.valor_itens(p) + 300 * s.get("kills", 0) + 150 * s.get("assists", 0)
+                - 200 * s.get("deaths", 0) + 25 * p.get("level", 0))
+
+    def texto_ameaca(self) -> str:
+        _, deles = self._times()
+        if not deles:
+            return "Ainda não estou numa partida."
+        ordem = sorted(deles, key=self._forca, reverse=True)
+        p = ordem[0]
+        s = p["scores"]
+        def n(q, palavra):
+            return f"{q} {palavra}{'' if q == 1 else 's'}"
+        frase = (f"A maior ameaça é {p['championName']}: {n(s['kills'], 'abate')}, "
+                 f"{n(s['deaths'], 'morte')} e {n(s['assists'], 'assistência')}, "
+                 f"nível {p.get('level')}")
+        if self.itens:
+            frase += f", com {_milhar(self.valor_itens(p))} de ouro em itens"
+        return frase + "."
+
+    def texto_rota(self) -> str:
+        if not self.eu:
+            return "Ainda não estou numa partida."
+        _, deles = self._times()
+        pos = self.eu.get("position")
+        rival = next((p for p in deles if pos and p.get("position") == pos), None)
+        if not rival:
+            return "Não identifiquei o seu oponente de rota."
+        eu, ele = self.eu, rival
+        frase = [f"Contra {ele['championName']}: você nível {eu.get('level')}, "
+                 f"ele nível {ele.get('level')}."]
+        if self.itens:
+            dif = self.valor_itens(eu) - self.valor_itens(ele)
+            frase.append("Itens equilibrados." if abs(dif) < 300 else
+                         f"Você tem {_milhar(abs(dif))} de ouro em itens "
+                         f"{'a mais' if dif > 0 else 'a menos'}.")
+        se, sr = eu["scores"], ele["scores"]
+        if pos != "UTILITY":
+            frase.append(f"CS {se.get('creepScore', 0)} a {sr.get('creepScore', 0)}.")
+        frase.append(f"Ele está {sr['kills']}, {sr['deaths']}, {sr['assists']}.")
+        return " ".join(frase)
 
     # -- comandos de voz ---------------------------------------------------
     def executar_comando(self, cmd: str):
         t = (self.ultimo_jogo or {}).get("gameData", {}).get("gameTime")
         if cmd == "build":
             self.voz.falar(self.texto_build or "Não tenho build cadastrada para esse campeão.",
-                           t, forcar=True)
+                           t, forcar=True, guardar=False)
         elif cmd == "silencio":
             minutos = CONFIG["minutos_silencio"]
-            self.voz.falar(f"Ok, silêncio por {minutos} minutos.", t, forcar=True)
+            self.voz.falar(f"Ok, silêncio por {minutos} minutos.", t, forcar=True, guardar=False)
             self.voz.mudo_ate = time.time() + minutos * 60
         elif cmd == "volta":
             self.voz.mudo_ate = 0
-            self.voz.falar("Voltei.", t)
+            if CONFIG.get("modo_menos"):
+                salvar_config({"modo_menos": False})
+            self.voz.falar("Voltei, com todos os avisos.", t, guardar=False)
+        elif cmd == "menos":
+            ligar = not CONFIG.get("modo_menos")
+            salvar_config({"modo_menos": ligar})
+            self.voz.falar("Ok, só os avisos importantes." if ligar else
+                           "Ok, todos os avisos de novo.", t, forcar=True, guardar=False)
+        elif cmd in ("mais_alto", "mais_baixo"):
+            passo = 20 if cmd == "mais_alto" else -20
+            volume = max(20, min(100, CONFIG.get("volume_voz", 100) + passo))
+            salvar_config({"volume_voz": volume})
+            self.voz.falar(f"Volume em {volume} por cento.", t, forcar=True, guardar=False)
+        elif cmd == "repete":
+            self.voz.falar(self.voz.ultima_frase or "Ainda não falei nada.", t, forcar=True,
+                           guardar=False)
+        elif cmd == "plano":
+            texto = " ".join(self.plano_texto) or "Ainda não tenho plano para esta partida."
+            self.voz.falar(texto, t, forcar=True, guardar=False)
+        elif cmd == "placar":
+            self.voz.falar(self.texto_placar(), t, forcar=True, guardar=False)
+        elif cmd == "farm":
+            self.voz.falar(self.texto_farm(t), t, forcar=True, guardar=False)
+        elif cmd == "ameaca":
+            self.voz.falar(self.texto_ameaca(), t, forcar=True, guardar=False)
+        elif cmd == "rota":
+            self.voz.falar(self.texto_rota(), t, forcar=True, guardar=False)
         elif cmd == "anota":
             if not self.em_partida or t is None:
                 return
             self.anotacoes.append(fmt_tempo(t))
-            self.voz.falar("Anotado.", t, forcar=True)
+            self.voz.falar("Anotado.", t, forcar=True, guardar=False)
 
     # -- loop principal ----------------------------------------------------
     def processar(self, jogo: dict):
@@ -1569,6 +1766,7 @@ class Coach:
         self.checar_proximo_item(ativo, t)
         self.checar_diferenca_ouro(jogo, t)
         self.checar_cs(t)
+        self.checar_objetivos(jogo, t)
 
     def checar_eventos(self, jogo: dict, t: float):
         eventos = jogo.get("events", {}).get("Events", [])
@@ -1583,9 +1781,11 @@ class Coach:
                 self.mortes.append({"tempo": fmt_tempo(tempo), "matador": ev.get("KillerName")})
                 if tempo < 14 * 60:
                     self.voz.falar(
-                        "Morte antes dos 14 minutos. Ficou anotada no resumo.", t)
+                        "Morte antes dos 14 minutos. Ficou anotada no resumo.", t, extra=True)
                 else:
-                    self.voz.falar("Você morreu.", t)
+                    self.voz.falar("Você morreu.", t, extra=True)
+            elif nome in ("DragonKill", "BaronKill", "HeraldKill"):
+                self.objetivo_morto(ev)
             elif nome == "GameEnd":
                 self.voz.bloqueado = False
                 self.resultado = ev.get("Result")
@@ -1614,29 +1814,29 @@ class Coach:
         self.historico_kp.append((t, kp))
         if kp < CONFIG["kp_minimo"] and self.pode_avisar("kp", CONFIG["intervalo_aviso_kp_s"], t):
             self.voz.falar(
-                f"Sua participação em abates está em {round(kp * 100)} por cento.", t)
+                f"Sua participação em abates está em {round(kp * 100)} por cento.", t, extra=True)
 
     def checar_sentinela(self, t: float):
         if not CONFIG["lembrar_sentinela_controle"] or t < 3 * 60:
             return
         tem = any(i.get("itemID") == ID_SENTINELA_CONTROLE for i in self.eu.get("items", []))
         if not tem and self.pode_avisar("sentinela", CONFIG["intervalo_aviso_sentinela_s"], t):
-            self.voz.falar("Você está sem sentinela de controle.", t)
+            self.voz.falar("Você está sem sentinela de controle.", t, extra=True)
 
     def checar_lembretes_tempo(self, t: float):
         for mmss, frase in CONFIG["lembretes_tempo"].items():
             alvo = parse_mmss(mmss)
             if mmss not in self.lembretes_feitos and alvo <= t < alvo + 10:
                 self.lembretes_feitos.add(mmss)
-                self.voz.falar(frase, t)
+                self.voz.falar(frase, t, extra=True)
 
     def checar_nivel(self, ativo: dict, t: float):
         nivel = ativo.get("level", 0)
         if CONFIG["avisar_niveis_ult"] and nivel != self.nivel_anterior:
             if nivel == 6:
-                self.voz.falar("Nível 6. Ultimate disponível.", t)
+                self.voz.falar("Nível 6. Ultimate disponível.", t, extra=True)
             elif nivel in (11, 16):
-                self.voz.falar(f"Nível {nivel}. Ultimate mais forte.", t)
+                self.voz.falar(f"Nível {nivel}. Ultimate mais forte.", t, extra=True)
         self.nivel_anterior = nivel
 
     # -- fim ---------------------------------------------------------------

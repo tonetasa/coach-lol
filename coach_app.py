@@ -84,6 +84,8 @@ FUNCOES = [
      "Quanto falta para o próximo item da build.", False),
     ("avisar_cs_baixo", "CS por minuto baixo",
      "Fora do suporte, quando ficar abaixo do mínimo.", False),
+    ("avisar_objetivos", "Objetivos neutros nascendo",
+     "1 minuto antes de dragão, vastilarvas, arauto e barão (pelos tempos padrão).", False),
 ]
 
 

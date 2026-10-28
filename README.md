@@ -20,7 +20,18 @@ Na primeira vez, o Quíron pergunta seu Riot ID, elo, funções e campeões (poo
 - **Durante a partida** (opcional): diferença de ouro dos times, ouro para o próximo item, CS/min, caçador inimigo visto em abates/objetivos, recompensas.
 - **Fim da partida:** resumo falado, alerta de sequência de derrotas e de jogo de madrugada.
 - **Relatório:** evolução de participação em abates, mortes antes dos 14 min, por campeão e por horário.
-- **Comandos de voz** (offline): "Quíron itens", "Quíron silêncio", "Quíron volta", "Quíron anota". A palavra de chamada pode ser trocada em Configurações → Voz.
+- **Comandos de voz** (offline), sempre com a palavra de chamada antes ("Quíron", trocável em Configurações → Voz):
+  - "itens": build e ajustes contra o time inimigo
+  - "placar": abates, torres, dragões e diferença de ouro em itens
+  - "farm": seu CS e CS por minuto, comparado à meta da função
+  - "ameaça": o inimigo mais forte agora (abates, nível, ouro em itens)
+  - "rota": você contra o seu oponente direto (nível, itens, CS, abates)
+  - "plano": repete o plano do início da partida
+  - "repete": repete o último aviso
+  - "menos": só os avisos importantes ("volta" traz todos de novo)
+  - "mais alto" / "mais baixo": volume da voz
+  - "silêncio", "volta", "anota"
+- **Objetivos neutros**: avisa 1 minuto antes de dragão, vastilarvas, arauto e barão nascerem, pelos tempos padrão e pelos abates anunciados no jogo.
 - **Voz à escolha**: qualquer voz do Windows instalada, em três velocidades.
 - **Perfil pelo cliente**: busca o Riot ID, preenche o elo e sugere funções e campeões pelas últimas partidas.
 - **Builds para qualquer campeão:** os campeões em `builds.json` têm build pesquisada a cada patch; os demais recebem uma build genérica pela classe (mago, atirador, tanque...), com versão própria para a selva. Campeões fora da função em que costumam ser jogados (lista em `funcoes_comuns.py`) aparecem com aviso: a build é uma estimativa. No app, *Pedir build pesquisada* abre um pedido aqui no GitHub, e a atualização semanal inclui o campeão.
