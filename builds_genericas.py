@@ -71,6 +71,33 @@ ARQUETIPOS = {
                           "Resolve", ["Second Wind", "Unflinching"],
                           ["adaptativo", "adaptativo", "vida_escalavel"]),
     },
+    "lutador_ap": {
+        "itens": ["Riftmaker", "Sorcerer's Shoes", "Liandry's Torment", "Zhonya's Hourglass"],
+        "runas": "Conquistador", "ajustes": "mago",
+        "pagina": _pagina("Precision", ["Conqueror", "Triumph", "Legend: Haste", "Last Stand"],
+                          "Resolve", ["Second Wind", "Unflinching"],
+                          ["adaptativo", "adaptativo", "vida_escalavel"]),
+    },
+    # Variantes para a selva: priorizam limpar os acampamentos (dano em área e
+    # contínuo) e a runa de caçador da Dominação.
+    "mago_selva": {
+        "itens": ["Liandry's Torment", "Sorcerer's Shoes", "Zhonya's Hourglass",
+                  "Rabadon's Deathcap"],
+        "runas": "Colheita Sombria", "ajustes": "mago",
+        "pagina": _pagina("Domination", ["Dark Harvest", "Cheap Shot", "Grisly Mementos",
+                                         "Relentless Hunter"],
+                          "Sorcery", ["Manaflow Band", "Transcendence"],
+                          ["adaptativo", "adaptativo", "vida_escalavel"]),
+    },
+    "atirador_selva": {
+        "itens": ["Kraken Slayer", "Berserker's Greaves", "Infinity Edge",
+                  "Lord Dominik's Regards"],
+        "runas": "Ritmo Fatal", "ajustes": "fisico",
+        "pagina": _pagina("Precision", ["Lethal Tempo", "Triumph", "Legend: Alacrity",
+                                        "Coup de Grace"],
+                          "Domination", ["Grisly Mementos", "Relentless Hunter"],
+                          ["vel_ataque", "adaptativo", "vida_escalavel"]),
+    },
     "tanque": {
         "itens": ["Sunfire Aegis", "Plated Steelcaps", "Thornmail", "Force of Nature"],
         "runas": "Aperto dos Mortos-Vivos", "ajustes": "tanque",
@@ -102,6 +129,18 @@ FEITICOS = {
     "JUNGLE": ["Flash", "Smite"], "UTILITY": ["Flash", "Ignite"], "BOTTOM": ["Flash", "Heal"],
     "MIDDLE": ["Flash", "Ignite"], "TOP": ["Flash", "Teleport"],
 }
+# Campeões que a classificação oficial (tags) descreve mal para montar build
+EXCECOES = {
+    "Teemo": "mago", "Kayle": "mago", "Kennen": "mago", "Corki": "atirador",
+    "Katarina": "assassino_ap", "Akali": "assassino_ap", "Ekko": "assassino_ap",
+    "Evelynn": "assassino_ap", "Fizz": "assassino_ap", "Elise": "assassino_ap",
+    "Nidalee": "assassino_ap", "Diana": "lutador_ap", "Gwen": "lutador_ap",
+    "Mordekaiser": "lutador_ap", "Sylas": "lutador_ap", "Lillia": "lutador_ap",
+    "Rumble": "lutador_ap", "Singed": "tanque", "Shyvana": "lutador_ap",
+    "Kaisa": "atirador", "Varus": "atirador", "Ezreal": "atirador", "KogMaw": "atirador",
+    "Graves": "atirador", "Kindred": "atirador", "Quinn": "atirador", "Shaco": "assassino",
+}
+INICIO_SELVA = ["Gustwalker Hatchling", "Mosstomper Seedling", "Scorchclaw Pup"]
 ENCANTADORES = {"Lulu", "Janna", "Soraka", "Nami", "Sona", "Yuumi", "Karma", "Milio",
                 "Renata", "Seraphine", "Bard", "Taric", "Senna"}
 
@@ -112,10 +151,12 @@ def funcao_provavel(campeao: dict) -> str:
             "Mage": "MIDDLE", "Tank": "TOP", "Fighter": "TOP"}.get(tag, "TOP")
 
 
-def arquetipo(cid: str, campeao: dict, funcao: str) -> str:
+def _arquetipo_base(cid: str, campeao: dict, funcao: str) -> str:
     tags = campeao.get("tags") or ["Fighter"]
     info = campeao.get("info", {})
     magico = info.get("magic", 0) > info.get("attack", 0)
+    if cid in EXCECOES and funcao != "UTILITY":
+        return EXCECOES[cid]
     if funcao == "UTILITY":
         if cid in ENCANTADORES or (tags[0] == "Support" and "Tank" not in tags):
             return "encantador"
@@ -128,9 +169,19 @@ def arquetipo(cid: str, campeao: dict, funcao: str) -> str:
         return "tanque"
     if tags[0] == "Assassin":
         return "assassino_ap" if magico else "assassino"
+    if tags[0] == "Fighter" and magico:
+        return "lutador_ap"
     if tags[0] == "Mage" or magico:
         return "mago"
     return "lutador"
+
+
+def arquetipo(cid: str, campeao: dict, funcao: str) -> str:
+    tipo = _arquetipo_base(cid, campeao, funcao)
+    if funcao == "JUNGLE":  # versão que limpa melhor os acampamentos
+        return {"mago": "mago_selva", "encantador": "mago_selva", "atirador": "atirador_selva",
+                "suporte_tanque": "tanque"}.get(tipo, tipo)
+    return tipo
 
 
 def build_generica(cid: str, campeao: dict, funcao: str | None = None) -> dict:
@@ -142,6 +193,7 @@ def build_generica(cid: str, campeao: dict, funcao: str | None = None) -> dict:
         feiticos = ["Flash", "Heal"]
     return {"funcao": funcao, "runas": a["runas"], "itens": list(a["itens"]),
             "pagina": a["pagina"], "feiticos": feiticos,
+            "inicio": list(INICIO_SELVA) if funcao == "JUNGLE" else [],
             "ajustes": a["ajustes"], "generica": True, "arquetipo": tipo}
 
 
@@ -159,6 +211,7 @@ def validar(itens_en: set, runas: dict) -> list[str]:
         for r in p["runas"] + p["runas2"]:
             if r not in runas["runas"]:
                 erros.append(f"{nome}: runa {r}")
+    erros += [f"início: item {i}" for i in INICIO_SELVA if i not in itens_en]
     for aj in (AJUSTES_FISICO, AJUSTES_TANQUE):
         for _, itens in aj.values():
             erros += [f"ajuste: item {i}" for i in itens if i not in itens_en]

@@ -46,6 +46,7 @@ import requests
 import urllib3
 
 import builds_genericas
+import funcoes_comuns
 import plano
 from cliente_lol import FRAGMENTOS, ClienteLoL
 
@@ -470,7 +471,8 @@ def obter_build(cid: str, campeoes: dict, funcao: str | None = None) -> dict | N
     if not funcao:
         funcao = next((f for f in FUNCOES if cid in pool_da_funcao(f)), None)
     b = builds_genericas.build_generica(cid, campeoes[cid], funcao)
-    return dict(b, ajustes=TIPOS_AJUSTE[b["ajustes"]], tipo_ajuste=b["ajustes"])
+    return dict(b, ajustes=TIPOS_AJUSTE[b["ajustes"]], tipo_ajuste=b["ajustes"],
+                estimativa=not funcoes_comuns.comum(cid, b["funcao"]))
 # Suportes de engajamento (gancho/atordoamento) e campeões que mergulham
 ENGAJE = {"Leona", "Nautilus", "Thresh", "Blitzcrank", "Pyke", "Rell", "Alistar",
           "Rakan", "Maokai", "Braum", "Poppy"}
@@ -1149,6 +1151,8 @@ class Coach:
         self.build = build
         lista = ", ".join(self.itens.nome_pt(i) for i in build["itens"])
         rotulo = "Build genérica" if build.get("generica") else "Build"
+        if build.get("estimativa"):
+            self.voz.falar(funcoes_comuns.aviso(meu_id, self.eu["championName"], build["funcao"]))
         self.voz.falar(f"{rotulo}: {lista}.")
         ids_inimigos = [id_campeao(p, self.campeoes) for p in jogo["allPlayers"]
                         if p.get("team") != self.meu_time]
@@ -1490,6 +1494,8 @@ class SelecaoCampeoes:
         funcao = (eu.get("assignedPosition") or "").upper() or None
         build = obter_build(cid, self.campeoes, funcao)
         nome = self.nomes.get(cid, cid)
+        if funcao and not funcoes_comuns.comum(cid, funcao):
+            self.voz.falar(funcoes_comuns.aviso(cid, nome, funcao))
         if not build:
             print(f"(Sem build cadastrada para {nome}: nada importado.)")
             return
@@ -1511,8 +1517,10 @@ class SelecaoCampeoes:
                     if iid and iid not in principal and iid not in extras:
                         extras.append(iid)
             chave = self.campeoes.get(cid, {}).get("key")
+            inicio = [i for i in (self.itens.id(n) for n in build.get("inicio", [])) if i]
             if chave and self.cliente.importar_itens(
-                    chave, nome, [("Build principal (Quíron)", principal),
+                    chave, nome, [("Início (escolha um mascote da selva)", inicio),
+                                  ("Build principal (Quíron)", principal),
                                   ("Opções contra o time inimigo", extras),
                                   ("Visão", ["2055"])]):
                 feitos.append("itens")
@@ -1589,7 +1597,8 @@ class SelecaoCampeoes:
                    if a.get("type") == "ban" and a.get("completed")}
         nomes = lambda c: self.nomes.get(c, c)  # noqa: E731
         ranking = plano.sugerir_escolha(pool, aliados, inimigos, banidos, estatisticas_pool(),
-                                        self.campeoes, ENGAJE, MUITO_CC, MERGULHO, nomes)
+                                        self.campeoes, ENGAJE, MUITO_CC, MERGULHO, nomes,
+                                        funcao)
         if not ranking:
             self.voz.falar("Sua vez de escolher. Nenhum campeão do seu pool está disponível.")
             return

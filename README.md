@@ -22,7 +22,7 @@ Na primeira vez, o Quíron pergunta seu Riot ID, elo, funções e campeões (poo
 - **Fim da partida:** resumo falado, alerta de sequência de derrotas e de jogo de madrugada.
 - **Relatório:** evolução de participação em abates, mortes antes dos 14 min, por campeão e por horário.
 - **Comandos de voz** (offline): "coach itens", "coach silêncio", "coach volta", "coach anota".
-- **Builds para qualquer campeão:** os campeões em `builds.json` têm build pesquisada a cada patch; os demais recebem uma build genérica pela classe (mago, atirador, tanque...). No app, *Pedir build pesquisada* abre um pedido aqui no GitHub, e a atualização semanal inclui o campeão.
+- **Builds para qualquer campeão:** os campeões em `builds.json` têm build pesquisada a cada patch; os demais recebem uma build genérica pela classe (mago, atirador, tanque...), com versão própria para a selva. Campeões fora da função em que costumam ser jogados (lista em `funcoes_comuns.py`) aparecem com aviso: a build é uma estimativa. No app, *Pedir build pesquisada* abre um pedido aqui no GitHub, e a atualização semanal inclui o campeão.
 - **Builds editáveis** no app; suas edições ficam só no seu PC e têm prioridade.
 
 ## Som e microfone

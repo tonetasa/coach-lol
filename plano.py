@@ -6,6 +6,8 @@ ameaças); com a chave da API do Claude configurada, o app pode pedir à IA um
 plano mais detalhado (ver ia_chat.py).
 """
 
+from funcoes_comuns import comum
+
 # Campeões fortes no início (pressão cedo) e que escalam bem (fim de jogo).
 # Ids do Data Dragon. Listas aproximadas: ajuste à vontade.
 FORTES_CEDO = {
@@ -205,7 +207,8 @@ def perfil_time(ids: list[str], campeoes: dict, engaje: set, muito_cc: set,
 
 def sugerir_escolha(pool: list[str], aliados: list[str], inimigos: list[str],
                     indisponiveis: set, stats: dict, campeoes: dict, engaje: set,
-                    muito_cc: set, mergulho: set, nomes) -> list[tuple[str, float, list[str]]]:
+                    muito_cc: set, mergulho: set, nomes,
+                    funcao: str | None = None) -> list[tuple[str, float, list[str]]]:
     """Ordena o seu pool para este draft. Retorna [(campeão, nota, motivos)]."""
     a = perfil_time(aliados, campeoes, engaje, muito_cc, mergulho)
     i = perfil_time(inimigos, campeoes, engaje, muito_cc, mergulho)
@@ -236,6 +239,9 @@ def sugerir_escolha(pool: list[str], aliados: list[str], inimigos: list[str],
             motivos.append("combina com um time que escala para lutas")
         if i["cura"] >= 2 and cid == "Morgana":
             nota += 1
+        if funcao and not comum(cid, funcao):
+            nota -= 4
+            motivos.append("incomum nesta função")
         resultado.append((cid, round(nota, 1), motivos))
     resultado.sort(key=lambda r: -r[1])
     return resultado

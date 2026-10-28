@@ -20,6 +20,7 @@ import customtkinter as ctk
 
 import atualizacao
 import coach_lol as coach
+import funcoes_comuns
 import ia_chat
 import registro
 import relatorio_lol as relatorio
@@ -388,6 +389,7 @@ class App(ctk.CTk):
                              f"runa {b['runas']}", font=self.f_peq,
                              text_color=TEXTO2).pack(side="left", pady=(2, 0))
                 selo = ("personalizada" if b.get("personalizado") else
+                        "estimativa" if b.get("estimativa") else
                         "genérica" if b.get("generica") else "")
                 if selo:
                     ctk.CTkLabel(topo, text=f"  {selo}", font=self.f_peq,
@@ -399,8 +401,8 @@ class App(ctk.CTk):
                     self._botao_secundario(topo, "Restaurar", lambda c=cid: self._restaurar(c),
                                            80).pack(side="right", padx=6)
                 if b.get("generica"):
-                    self._botao_secundario(topo, "Pedir build pesquisada",
-                                           lambda c=cid: self._pedir_build(c), 160).pack(
+                    self._botao_secundario(topo, "Pedir build",
+                                           lambda c=cid: self._pedir_build(c), 100).pack(
                         side="right", padx=6)
                 v, d = stats.get(cid, (0, 0))
                 if v + d:
@@ -1084,15 +1086,19 @@ class App(ctk.CTk):
 
 
 class SeletorCampeao(ctk.CTkToplevel):
-    """Grade com os ícones de todos os campeões e busca por nome."""
+    """Grade com os ícones dos campeões e busca por nome.
+
+    Com `funcao`, mostra primeiro os campeões comuns nela e depois os incomuns.
+    """
 
     COLUNAS = 7
 
-    def __init__(self, pai, app: App, ao_escolher, excluir=(), titulo="Escolher campeão"):
+    def __init__(self, pai, app: App, ao_escolher, excluir=(), titulo="Escolher campeão",
+                 funcao: str | None = None):
         super().__init__(pai, fg_color=FUNDO)
         self.app, self.ao_escolher = app, ao_escolher
         self.title(titulo)
-        self.geometry("640x600")
+        self.geometry("640x620")
         self.transient(pai)
         self.after(100, self.grab_set)
         self.busca = ctk.CTkEntry(self, placeholder_text="Buscar campeão...", height=36,
@@ -1100,22 +1106,40 @@ class SeletorCampeao(ctk.CTkToplevel):
         self.busca.pack(fill="x", padx=16, pady=(16, 8))
         self.busca.bind("<KeyRelease>", lambda e: self._filtrar())
         self.after(150, self.busca.focus_set)
-        self.grade = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self.grade.pack(fill="both", expand=True, padx=10, pady=(0, 12))
-        for c in range(self.COLUNAS):
-            self.grade.grid_columnconfigure(c, weight=1)
-        lista = sorted(((c["name"], cid) for cid, c in app.campeoes.items()
+        rolagem = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        rolagem.pack(fill="both", expand=True, padx=10, pady=(0, 12))
+
+        todos = sorted(((c["name"], cid) for cid, c in app.campeoes.items()
                         if cid not in excluir), key=lambda x: x[0].lower())
-        app.icones.pre_carregar(cid for _, cid in lista)
-        self.celulas = []
-        for nome, cid in lista:
-            bt = ctk.CTkButton(self.grade, text=nome if len(nome) <= 11 else nome[:10] + "…",
-                               width=80, height=86, compound="top", fg_color="transparent",
-                               hover_color=BORDA, text_color=TEXTO, font=app.f_peq,
-                               image=app.icones.obter(cid, 52) or app.icones.vazio(52),
-                               command=lambda cid=cid: self._escolher(cid))
-            self.celulas.append((nome.lower(), cid, bt))
-            self._pendente(cid, bt)
+        app.icones.pre_carregar(cid for _, cid in todos)
+        grupos = [(None, todos)]
+        if funcao:
+            lugar = funcoes_comuns.LUGAR.get(funcao, "")
+            grupos = [(f"Comuns {lugar}", [t for t in todos if funcoes_comuns.comum(t[1], funcao)]),
+                      (f"Incomuns {lugar} (build vira estimativa)",
+                       [t for t in todos if not funcoes_comuns.comum(t[1], funcao)])]
+        self.secoes = []
+        for titulo_grupo, lista in grupos:
+            cab = None
+            if titulo_grupo:
+                cab = ctk.CTkLabel(rolagem, text=titulo_grupo, font=app.f_sub)
+                cab.pack(anchor="w", padx=6, pady=(6, 2))
+            grade = ctk.CTkFrame(rolagem, fg_color="transparent")
+            grade.pack(fill="x")
+            for c in range(self.COLUNAS):
+                grade.grid_columnconfigure(c, weight=1)
+            incomum = bool(titulo_grupo and titulo_grupo.startswith("Incomuns"))
+            celulas = []
+            for nome, cid in lista:
+                bt = ctk.CTkButton(grade, text=nome if len(nome) <= 11 else nome[:10] + "…",
+                                   width=80, height=86, compound="top", fg_color="transparent",
+                                   hover_color=BORDA, text_color=CINZA if incomum else TEXTO,
+                                   font=app.f_peq,
+                                   image=app.icones.obter(cid, 52) or app.icones.vazio(52),
+                                   command=lambda cid=cid: self._escolher(cid))
+                celulas.append((nome.lower(), cid, bt))
+                self._pendente(cid, bt)
+            self.secoes.append((cab, grade, celulas))
         self._filtrar()
 
     def _pendente(self, cid, bt):
@@ -1128,13 +1152,22 @@ class SeletorCampeao(ctk.CTkToplevel):
 
     def _filtrar(self):
         texto = self.busca.get().strip().lower()
-        i = 0
-        for nome, _, bt in self.celulas:
-            if texto in nome:
-                bt.grid(row=i // self.COLUNAS, column=i % self.COLUNAS, padx=2, pady=2)
-                i += 1
-            else:
-                bt.grid_forget()
+        for cab, grade, _ in self.secoes:  # re-empacota na ordem, só o que tem resultado
+            if cab is not None:
+                cab.pack_forget()
+            grade.pack_forget()
+        for cab, grade, celulas in self.secoes:
+            i = 0
+            for nome, _, bt in celulas:
+                if texto in nome:
+                    bt.grid(row=i // self.COLUNAS, column=i % self.COLUNAS, padx=2, pady=2)
+                    i += 1
+                else:
+                    bt.grid_forget()
+            if i:
+                if cab is not None:
+                    cab.pack(anchor="w", padx=6, pady=(6, 2))
+                grade.pack(fill="x")
 
     def _escolher(self, cid):
         self.ao_escolher(cid)
@@ -1259,6 +1292,13 @@ class EditorPerfil(ctk.CTkToplevel):
                              text_color=CINZA).pack(side="right")
             grade = ctk.CTkFrame(card, fg_color="transparent")
             grade.pack(fill="x", padx=12, pady=(0, 10))
+            incomuns = [self.app.campeoes.get(c, {}).get("name", c) for c in self.pool.get(f, [])
+                        if not funcoes_comuns.comum(c, f)]
+            if incomuns:
+                ctk.CTkLabel(card, text=f"⚠ Pouco jogado {funcoes_comuns.LUGAR[f]}: "
+                             f"{', '.join(incomuns)}. A build vai ser uma estimativa.",
+                             font=self.app.f_peq, text_color=OURO, wraplength=520,
+                             justify="left").pack(anchor="w", padx=14, pady=(0, 10))
             por_linha = 6
             lista = self.pool.get(f, [])
             for i, cid in enumerate(lista):
@@ -1273,7 +1313,8 @@ class EditorPerfil(ctk.CTkToplevel):
                               command=lambda f=f: SeletorCampeao(
                                   self, self.app, lambda cid, f=f: self._adicionar_id(f, cid),
                                   excluir=set(self.pool.get(f, [])),
-                                  titulo=f"Adicionar campeão: {self.NOMES[f]}")).grid(
+                                  titulo=f"Adicionar campeão: {self.NOMES[f]}",
+                                  funcao=f)).grid(
                     row=n // por_linha, column=n % por_linha, padx=9, pady=(6, 4), sticky="n")
 
     def _bloco_campeao(self, pai, funcao, cid):
@@ -1282,7 +1323,8 @@ class EditorPerfil(ctk.CTkToplevel):
         bt = ctk.CTkButton(pai, text=nome if len(nome) <= 10 else nome[:9] + "…",
                            image=self.app.icones.obter(cid, 60) or self.app.icones.vazio(60),
                            compound="top", width=78, height=88, fg_color="transparent",
-                           hover_color=("#f3d2cf", "#4a2422"), text_color=TEXTO,
+                           hover_color=("#f3d2cf", "#4a2422"),
+                           text_color=TEXTO if funcoes_comuns.comum(cid, funcao) else OURO,
                            font=self.app.f_peq, command=lambda: self._remover(funcao, cid))
         if not (coach.PASTA_ICONES / f"{cid}.png").exists():
             def pronto():
