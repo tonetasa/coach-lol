@@ -146,6 +146,35 @@ TRACOS_POOL = {
     "Morgana": {"anti_engaje", "controle", "dano_magico"},
     "Milio": {"anti_engaje", "protecao", "anti_mergulho"},
 }
+ANTI_ENGAJE = {"Morgana", "Milio", "Janna", "Braum", "Taric", "Alistar", "Renata"}
+PROTETORES = {"Lulu", "Janna", "Milio", "Braum", "Taric", "Thresh", "Karma", "Nami",
+              "Soraka", "Yuumi", "Renata", "Rell", "Alistar"}
+POKE = {"Karma", "Lux", "Xerath", "Velkoz", "Zyra", "Ziggs", "Jayce", "Varus", "Ezreal",
+        "Hwei", "Brand", "Zoe", "Nidalee", "Caitlyn"}
+
+
+def tracos_genericos(cid: str, campeoes: dict, muito_cc: set) -> set:
+    """Traços aproximados de qualquer campeão, pelas tags oficiais e listas acima."""
+    c = campeoes.get(cid, {})
+    tags, info = c.get("tags", []), c.get("info", {})
+    t = set()
+    if info.get("magic", 0) > info.get("attack", 0):
+        t.add("dano_magico")
+    if cid in muito_cc or "Tank" in tags:
+        t.add("controle")
+    if cid in ANTI_ENGAJE:
+        t.add("anti_engaje")
+    if cid in PROTETORES:
+        t |= {"protecao", "anti_mergulho"}
+    if cid in POKE:
+        t.add("poke")
+    if cid in ESCALAM:
+        t.add("escala")
+    if tags[:1] in (["Mage"], ["Tank"]) or cid in muito_cc:
+        t.add("teamfight")
+    return t
+
+
 CURADORES = {"Soraka", "Yuumi", "Sona", "Nami", "Milio", "Seraphine", "Renata",
              "Aatrox", "Vladimir", "DrMundo", "Warwick", "Sylas", "Briar", "Swain"}
 
@@ -188,7 +217,7 @@ def sugerir_escolha(pool: list[str], aliados: list[str], inimigos: list[str],
         taxa = (v + 1) / (v + d + 2)  # suaviza poucas partidas
         nota = taxa * 100
         motivos = [f"{round(100 * v / (v + d))}% em {v + d} partidas"] if v + d >= 5 else []
-        tracos = TRACOS_POOL.get(cid, set())
+        tracos = TRACOS_POOL.get(cid) or tracos_genericos(cid, campeoes, muito_cc)
         if i["engaje"] and "anti_engaje" in tracos:
             nota += 6
             alvo = " e ".join(nomes(c) for c in inimigos if c in engaje)

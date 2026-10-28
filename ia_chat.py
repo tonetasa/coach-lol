@@ -15,9 +15,10 @@ import coach_lol as coach
 URL = "https://api.anthropic.com/v1/messages"
 MODELOS = {"Sonnet 5.5 (melhor)": "claude-sonnet-5-5",
            "Haiku 5.5 (mais barato)": "claude-haiku-5-5"}
-SERVICO = "CoachLoL"
+SERVICO = "Quiron"
+SERVICO_ANTIGO = "CoachLoL"
 
-SISTEMA = """Você é o coach de League of Legends do Matheus, dentro do app Coach LoL.
+SISTEMA = """Você é o coach de League of Legends do jogador, dentro do app Quíron.
 Responda em português do Brasil, direto e prático, como um coach de alto elo.
 Use os dados das partidas abaixo como base: cite números quando ajudar e diga
 quando os dados não bastam para concluir algo. Prefira 1 a 3 pontos de ação.
@@ -31,7 +32,12 @@ ultimate ou de feitiços inimigos, scripts, leitura de memória, etc.)."""
 def obter_chave() -> str | None:
     try:
         import keyring
-        return keyring.get_password(SERVICO, "anthropic")
+        chave = keyring.get_password(SERVICO, "anthropic")
+        if not chave:  # chave salva pela versão antiga (Coach LoL): migra
+            chave = keyring.get_password(SERVICO_ANTIGO, "anthropic")
+            if chave:
+                keyring.set_password(SERVICO, "anthropic", chave)
+        return chave
     except Exception:  # noqa: BLE001
         return coach.CONFIG.get("chave_api_reserva") or None
 
@@ -73,7 +79,7 @@ def contexto(max_partidas: int = 25) -> str:
     pool = "; ".join(f"{c}: {v}V {d}D" for c, (v, d) in stats.items() if v + d)
     builds = "; ".join(f"{c}: {', '.join(b['itens'])}" for c, b in coach.BUILDS.items())
     return (f"Hoje: {datetime.now():%d/%m/%Y %H:%M}\n"
-            f"Perfil: {coach.CONFIG.get('perfil_jogador', '')}\n"
+            f"Perfil: {coach.texto_perfil()}\n"
             f"Pool (temporada + partidas registradas): {pool}\n"
             f"Builds usadas (patch {coach.INFO_BUILDS.get('patch')}): {builds}\n\n"
             f"Últimas {len(partidas)} partidas registradas pelo coach:\n"

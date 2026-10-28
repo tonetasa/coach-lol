@@ -1,8 +1,8 @@
-"""Atualização automática do Coach LoL pelo GitHub Releases.
+"""Atualização automática do Quíron pelo GitHub Releases.
 
 Para lançar uma versão: mude VERSAO em versao.py, gere o instalador e crie
 uma release no GitHub com a tag v<versão> (ex.: v1.0.1) e o arquivo
-CoachLoL-Setup-<versão>.exe anexado. O app avisa e instala com um clique.
+Quiron-Setup-<versão>.exe anexado. O app avisa e instala com um clique.
 """
 
 import subprocess
@@ -44,7 +44,7 @@ def verificar(versao_atual: str) -> dict | None:
 
 def baixar(info: dict, progresso=None) -> Path:
     """Baixa o instalador para a pasta temporária. progresso(0..1) opcional."""
-    destino = Path(tempfile.gettempdir()) / f"CoachLoL-Setup-{info['versao']}.exe"
+    destino = Path(tempfile.gettempdir()) / f"Quiron-Setup-{info['versao']}.exe"
     with requests.get(info["url"], stream=True, timeout=30) as r:
         r.raise_for_status()
         total = int(r.headers.get("content-length", 0)) or None

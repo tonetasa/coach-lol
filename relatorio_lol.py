@@ -23,9 +23,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 def _pasta_dados() -> Path:
-    """Instalado (.exe): %APPDATA%\\CoachLoL. Rodando o .py: a pasta do script."""
+    """Instalado (.exe): %APPDATA%\\Quiron. Rodando o .py: a pasta do script."""
     if getattr(sys, "frozen", False):
-        pasta = Path(os.environ.get("APPDATA", str(Path.home()))) / "CoachLoL"
+        pasta = Path(os.environ.get("APPDATA", str(Path.home()))) / "Quiron"
         pasta.mkdir(parents=True, exist_ok=True)
         return pasta
     return Path(__file__).parent
@@ -127,7 +127,7 @@ HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Relatório LoL</title>
+<title>Relatório Quíron</title>
 <style>
 :root {
   color-scheme: light;
@@ -190,7 +190,7 @@ ul.anot { margin: 8px 0 0; padding-left: 20px; }
 </head>
 <body>
 <main>
-  <h1>Relatório LoL</h1>
+  <h1>Relatório Quíron</h1>
   <p class="sub" id="periodo"></p>
   <div id="conteudo"></div>
 </main>

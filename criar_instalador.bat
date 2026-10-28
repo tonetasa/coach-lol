@@ -2,18 +2,18 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 echo.
-echo === Criando o instalador do Coach LoL ===
+echo === Criando o instalador do Quiron ===
 echo.
 echo [1/4] Instalando as ferramentas do Python...
 python -m pip install --upgrade pyinstaller requests pyttsx3 vosk sounddevice customtkinter pystray pillow keyring
 if errorlevel 1 goto erro
 
 echo.
-echo [2/4] Montando o CoachLoL.exe (leva 1 a 3 minutos)...
+echo [2/4] Montando o Quiron.exe (leva 1 a 3 minutos)...
 for /f %%v in ('python gerar_info_versao.py') do set "VER=%%v"
 if not defined VER goto erro
 echo Versao %VER%
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name CoachLoL ^
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name Quiron ^
   --icon icone.ico --version-file version_info.txt --add-data "icone.ico;." ^
   --hidden-import pyttsx3.drivers --hidden-import pyttsx3.drivers.sapi5 ^
   --collect-submodules comtypes --collect-all vosk --collect-all sounddevice ^
@@ -44,16 +44,16 @@ if not defined ISCC (
 
 echo.
 echo [4/4] Gerando o instalador...
-"%ISCC%" /Q /DAppVersion=%VER% CoachLoL.iss
+"%ISCC%" /Q /DAppVersion=%VER% Quiron.iss
 if errorlevel 1 goto erro
 
 rmdir /S /Q build >nul 2>&1
-del /Q CoachLoL.spec version_info.txt >nul 2>&1
+del /Q Quiron.spec version_info.txt >nul 2>&1
 
 echo.
-echo Pronto! O instalador esta em: %~dp0instalador\CoachLoL-Setup-%VER%.exe
+echo Pronto! O instalador esta em: %~dp0instalador\Quiron-Setup-%VER%.exe
 echo Abrindo o instalador...
-start "" "%~dp0instalador\CoachLoL-Setup-%VER%.exe"
+start "" "%~dp0instalador\Quiron-Setup-%VER%.exe"
 echo.
 pause
 exit /b 0

@@ -1,5 +1,5 @@
 """
-Coach LoL — assistente de voz em tempo real (protótipo)
+Quíron — coach de voz para League of Legends
 =======================================================
 
 Lê a Live Client Data API OFICIAL da Riot (https://127.0.0.1:2999), que o
@@ -45,15 +45,16 @@ from pathlib import Path
 import requests
 import urllib3
 
+import builds_genericas
 import plano
 from cliente_lol import FRAGMENTOS, ClienteLoL
 
 # Pasta dos dados (partidas, caches, configuração, modelo de voz). No .exe é a
 # pasta do executável; rodando o .py, é a pasta do script.
 def _pasta_dados() -> Path:
-    """Instalado (.exe): %APPDATA%\\CoachLoL. Rodando o .py: a pasta do script."""
+    """Instalado (.exe): %APPDATA%\\Quiron. Rodando o .py: a pasta do script."""
     if getattr(sys, "frozen", False):
-        pasta = Path(os.environ.get("APPDATA", str(Path.home()))) / "CoachLoL"
+        pasta = Path(os.environ.get("APPDATA", str(Path.home()))) / "Quiron"
         pasta.mkdir(parents=True, exist_ok=True)
         return pasta
     return Path(__file__).parent
@@ -161,8 +162,8 @@ CONFIG = {
     # Chat com IA (API do Claude). A chave fica no Gerenciador de Credenciais.
     "modelo_ia": "claude-sonnet-5-5",
     "plano_por_ia": False,       # plano pré-partida também pela IA (custa centavos)
-    "perfil_jogador": "Esmeralda IV no servidor BR; joga de caçador (Fiddlesticks) "
-                      "e suporte (Karma, Lulu, Seraphine, Morgana, Milio)",
+    # Perfil do jogador (preenchido no primeiro uso do app)
+    "perfil": {},
     "chave_api_reserva": "",
     "pasta_lol": r"C:\Riot Games\League of Legends",
 
@@ -172,6 +173,8 @@ CONFIG = {
     #   "coach volta"    -> volta a falar
     #   "coach anota"    -> marca o momento para revisar no resumo da partida
     "comandos_de_voz": True,
+    "microfone": "",                  # vazio = padrão do Windows
+    "microfone_so_na_partida": True,  # fecha o microfone fora da partida
     "minutos_silencio": 3,
 }
 
@@ -179,15 +182,17 @@ CONFIG_ARQ = BASE / "config_coach.json"
 
 
 def migrar_dados_antigos() -> int:
-    """Copia partidas e configuração da versão sem instalador (pasta Downloads).
+    """Copia partidas e configuração das versões antigas para a pasta atual.
 
-    Só copia o que ainda não existe na pasta nova; nada é apagado da antiga.
+    Origens: %APPDATA%\\CoachLoL (versão "Coach LoL"), a pasta Downloads e a
+    pasta do executável. Só copia o que ainda não existe; nada é apagado.
     """
     import shutil
-    origens = [Path.home() / "Downloads", Path(sys.executable).parent]
+    appdata = Path(os.environ.get("APPDATA", str(Path.home())))
+    origens = [appdata / "CoachLoL", Path.home() / "Downloads", Path(sys.executable).parent]
     copiados = 0
     for origem in origens:
-        if origem.resolve() == BASE.resolve():
+        if not origem.is_dir() or origem.resolve() == BASE.resolve():
             continue
         antigas = origem / "partidas"
         if antigas.is_dir():
@@ -197,7 +202,7 @@ def migrar_dados_antigos() -> int:
                 if not destino.exists():
                     shutil.copy2(arq, destino)
                     copiados += 1
-        for nome in ("config_coach.json",):
+        for nome in ("config_coach.json", "builds_usuario.json"):
             if (origem / nome).exists() and not (BASE / nome).exists():
                 shutil.copy2(origem / nome, BASE / nome)
         if (origem / "modelo_voz").is_dir() and not (BASE / "modelo_voz").exists():
@@ -396,23 +401,76 @@ BUILDS_PADRAO = {
               "ajustes": "encantador"},
 }
 PATCH_PADRAO = "26.21"
-TIPOS_AJUSTE = {"mago": AJUSTES_MAGO, "encantador": AJUSTES_ENCANTADOR}
+TIPOS_AJUSTE = {"mago": AJUSTES_MAGO, "encantador": AJUSTES_ENCANTADOR,
+                "fisico": builds_genericas.AJUSTES_FISICO,
+                "tanque": builds_genericas.AJUSTES_TANQUE}
 
 # Builds em uso: padrão  <-  baixadas do GitHub  <-  editadas por você no app.
 # (preenchido por carregar_builds(); "ajustes" já vem como dicionário)
 BUILDS: dict = {}
 INFO_BUILDS = {"patch": PATCH_PADRAO, "fonte": "padrão"}
 
-# Seu pool por função e o histórico da temporada (op.gg, 27/10/2026).
-# As partidas que o coach registra em ./partidas/ são somadas a isso.
-POOL = {
-    "JUNGLE": ["Fiddlesticks"],
-    "UTILITY": ["Karma", "Lulu", "Seraphine", "Morgana", "Milio"],
+# O perfil (Riot ID, elo, funções e pool) vem da tela de primeiro uso do app e
+# fica em CONFIG["perfil"]. Histórico de temporada já conhecido de alguém pode
+# servir de ponto de partida (somado às partidas que o Quíron registra).
+HISTORICO_SEMENTE = {
+    "yabbadabbadoo#420": {  # op.gg, 27/10/2026
+        "Fiddlesticks": (70, 65), "Karma": (18, 8), "Lulu": (10, 5),
+        "Seraphine": (7, 8), "Morgana": (6, 6),
+    },
 }
-HISTORICO_BASE = {  # campeão: (vitórias, derrotas)
-    "Fiddlesticks": (70, 65), "Karma": (18, 8), "Lulu": (10, 5),
-    "Seraphine": (7, 8), "Morgana": (6, 6), "Milio": (0, 0),
+# Perfil da versão antiga (antes do primeiro uso existir): preenche o assistente
+PERFIL_ANTIGO = {
+    "riot_id": "YabbaDabbaDoo#420", "servidor": "BR", "elo": "Esmeralda IV",
+    "funcoes": ["JUNGLE", "UTILITY"],
+    "pool": {"JUNGLE": ["Fiddlesticks"],
+             "UTILITY": ["Karma", "Lulu", "Seraphine", "Morgana", "Milio"]},
 }
+FUNCOES = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
+
+
+def perfil() -> dict:
+    p = CONFIG.get("perfil") or {}
+    return {"riot_id": p.get("riot_id", ""), "servidor": p.get("servidor", "BR"),
+            "elo": p.get("elo", ""), "funcoes": list(p.get("funcoes", [])),
+            "pool": {f: list(c) for f, c in (p.get("pool") or {}).items()}}
+
+
+def pool_da_funcao(funcao: str) -> list[str]:
+    return perfil()["pool"].get(funcao, [])
+
+
+def todos_do_pool() -> list[str]:
+    vistos = []
+    for f in FUNCOES:
+        for c in pool_da_funcao(f):
+            if c not in vistos:
+                vistos.append(c)
+    return vistos
+
+
+def texto_perfil() -> str:
+    p = perfil()
+    if not p["funcoes"]:
+        return "perfil não configurado"
+    nomes = {"TOP": "topo", "JUNGLE": "caçador", "MIDDLE": "meio", "BOTTOM": "atirador",
+             "UTILITY": "suporte"}
+    partes = [f"{nomes[f]} ({', '.join(p['pool'].get(f, [])) or 'sem pool'})"
+              for f in p["funcoes"]]
+    return (f"{p['elo'] or 'elo não informado'} no servidor {p['servidor']}"
+            f"{' (' + p['riot_id'] + ')' if p['riot_id'] else ''}; joga de " + "; ".join(partes))
+
+
+def obter_build(cid: str, campeoes: dict, funcao: str | None = None) -> dict | None:
+    """Build pesquisada (builds.json ou sua edição) ou, se não houver, a genérica."""
+    if cid in BUILDS:
+        return BUILDS[cid]
+    if cid not in campeoes:
+        return None
+    if not funcao:
+        funcao = next((f for f in FUNCOES if cid in pool_da_funcao(f)), None)
+    b = builds_genericas.build_generica(cid, campeoes[cid], funcao)
+    return dict(b, ajustes=TIPOS_AJUSTE[b["ajustes"]], tipo_ajuste=b["ajustes"])
 # Suportes de engajamento (gancho/atordoamento) e campeões que mergulham
 ENGAJE = {"Leona", "Nautilus", "Thresh", "Blitzcrank", "Pyke", "Rell", "Alistar",
           "Rakan", "Maokai", "Braum", "Poppy"}
@@ -491,6 +549,19 @@ class Voz:
 # ---------------------------------------------------------------------------
 # Comandos de voz (offline, Vosk)
 # ---------------------------------------------------------------------------
+def listar_microfones() -> list[str]:
+    """Nomes dos dispositivos de entrada de áudio (para escolher nas Configurações)."""
+    try:
+        import sounddevice as sd
+        nomes = []
+        for d in sd.query_devices():
+            if d.get("max_input_channels", 0) > 0 and d["name"] not in nomes:
+                nomes.append(d["name"])
+        return nomes
+    except Exception:  # noqa: BLE001
+        return []
+
+
 class OuvidoComandos:
     """Escuta o microfone e coloca comandos reconhecidos numa fila.
 
@@ -501,6 +572,7 @@ class OuvidoComandos:
     def __init__(self):
         self.fila: "queue.Queue[str]" = queue.Queue()
         self.ativo = False
+        self.escutar = threading.Event()
         try:
             import sounddevice  # noqa: F401
             import vosk  # noqa: F401
@@ -529,6 +601,15 @@ class OuvidoComandos:
             print(f"(Não consegui baixar o modelo de voz: {e}. Comandos de voz desligados.)")
             return False
 
+    # O microfone só fica aberto enquanto `escutar` estiver ligado (durante a
+    # partida, por padrão). Microfone aberto faz fones Bluetooth trocarem para o
+    # modo "telefone" e o Windows abaixar outros sons, piorando música e jogo.
+    def ligar_microfone(self, ligar: bool):
+        if ligar:
+            self.escutar.set()
+        else:
+            self.escutar.clear()
+
     def _loop(self):
         import sounddevice as sd
         import vosk
@@ -536,25 +617,37 @@ class OuvidoComandos:
         pasta = next(p for p in PASTA_MODELO_VOZ.iterdir() if p.is_dir())
         modelo = vosk.Model(str(pasta))
         gramatica = json.dumps(list(FRASES_COMANDO) + ["[unk]"], ensure_ascii=False)
-        rec = vosk.KaldiRecognizer(modelo, 16000, gramatica)
         audio: "queue.Queue[bytes]" = queue.Queue()
 
         def callback(indata, frames, tempo, status):
             audio.put(bytes(indata))
 
-        try:
-            with sd.RawInputStream(samplerate=16000, blocksize=8000, dtype="int16",
-                                   channels=1, callback=callback):
-                print('Comandos de voz ativos. Diga "coach itens", "coach silêncio", '
-                      '"coach volta" ou "coach anota".')
-                while True:
-                    if rec.AcceptWaveform(audio.get()):
-                        texto = json.loads(rec.Result()).get("text", "").strip()
-                        if texto in FRASES_COMANDO:
-                            self.fila.put(FRASES_COMANDO[texto])
-        except Exception as e:  # noqa: BLE001
-            print(f"(Erro no microfone: {e}. Comandos de voz desligados.)")
-            self.ativo = False
+        while True:
+            self.escutar.wait()
+            rec = vosk.KaldiRecognizer(modelo, 16000, gramatica)
+            dispositivo = CONFIG.get("microfone") or None
+            try:
+                with sd.RawInputStream(samplerate=16000, blocksize=8000, dtype="int16",
+                                       channels=1, callback=callback, device=dispositivo):
+                    print('Microfone ligado. Diga "coach itens", "coach silêncio", '
+                          '"coach volta" ou "coach anota".')
+                    while self.escutar.is_set():
+                        try:
+                            bloco = audio.get(timeout=0.5)
+                        except queue.Empty:
+                            continue
+                        if rec.AcceptWaveform(bloco):
+                            texto = json.loads(rec.Result()).get("text", "").strip()
+                            if texto in FRASES_COMANDO:
+                                self.fila.put(FRASES_COMANDO[texto])
+                print("Microfone desligado.")
+            except Exception as e:  # noqa: BLE001
+                print(f"(Erro no microfone: {e}. Comandos de voz desligados.)")
+                self.escutar.clear()
+                self.ativo = False
+                return
+            while not audio.empty():
+                audio.get_nowait()
 
     def pegar(self) -> list[str]:
         cmds = []
@@ -1027,13 +1120,14 @@ class Coach:
 
     def falar_build(self, jogo: dict):
         meu_id = id_campeao(self.eu, self.campeoes)
-        build = BUILDS.get(meu_id)
+        build = obter_build(meu_id, self.campeoes, self.eu.get("position") or None)
         if not build:
             print(f"(Sem build cadastrada para {meu_id}. Adicione na aba Builds do app.)")
             return
         self.build = build
         lista = ", ".join(self.itens.nome_pt(i) for i in build["itens"])
-        self.voz.falar(f"Build: {lista}.")
+        rotulo = "Build genérica" if build.get("generica") else "Build"
+        self.voz.falar(f"{rotulo}: {lista}.")
         ids_inimigos = [id_campeao(p, self.campeoes) for p in jogo["allPlayers"]
                         if p.get("team") != self.meu_time]
         ajustes = [txt for k in analisar_inimigos(ids_inimigos, self.campeoes)
@@ -1044,7 +1138,7 @@ class Coach:
             self.voz.falar(frase)
         if ajustes:
             self.dica_build = " ".join(ajustes)
-        self.texto_build = " ".join([f"Build: {lista}."] + ajustes)
+        self.texto_build = " ".join([f"{rotulo}: {lista}."] + ajustes)
 
     # -- plano de jogo e rota da selva ---------------------------------------
     def falar_plano(self, jogo: dict):
@@ -1325,11 +1419,15 @@ NOMES_FUNCAO = {"UTILITY": "suporte", "JUNGLE": "caçador", "TOP": "topo",
 
 
 def estatisticas_pool() -> dict[str, tuple[int, int]]:
-    """Vitórias e derrotas por campeão: temporada (op.gg) + partidas registradas."""
-    stats = {c: list(vd) for c, vd in HISTORICO_BASE.items()}
+    """Vitórias e derrotas por campeão do pool: histórico inicial + partidas registradas."""
+    semente = HISTORICO_SEMENTE.get(perfil()["riot_id"].strip().lower(), {})
+    stats = {c: list(semente.get(c, (0, 0))) for c in todos_do_pool()}
+    for c, vd in semente.items():
+        stats.setdefault(c, list(vd))
     for r in ler_partidas():
         c = r.get("campeao_id") or r.get("campeao")
-        if c in stats and r.get("resultado"):
+        if r.get("resultado"):
+            stats.setdefault(c, [0, 0])
             stats[c][0 if r["resultado"] == "vitória" else 1] += 1
     return {c: (v, d) for c, (v, d) in stats.items()}
 
@@ -1367,7 +1465,8 @@ class SelecaoCampeoes:
 
     # -- importação -----------------------------------------------------------
     def importar(self, cid: str, eu: dict):
-        build = BUILDS.get(cid)
+        funcao = (eu.get("assignedPosition") or "").upper() or None
+        build = obter_build(cid, self.campeoes, funcao)
         nome = self.nomes.get(cid, cid)
         if not build:
             print(f"(Sem build cadastrada para {nome}: nada importado.)")
@@ -1376,7 +1475,7 @@ class SelecaoCampeoes:
         if CONFIG["importar_runas"] and build.get("pagina") and self.runas:
             ids = ids_da_pagina(build["pagina"], self.runas)
             if ids:
-                res = self.cliente.importar_runas(*ids, nome=f"Coach LoL - {nome}")
+                res = self.cliente.importar_runas(*ids, nome=f"Quíron - {nome}")
                 if res.startswith("ok"):
                     feitos.append("runas")
                 else:
@@ -1391,7 +1490,7 @@ class SelecaoCampeoes:
                         extras.append(iid)
             chave = self.campeoes.get(cid, {}).get("key")
             if chave and self.cliente.importar_itens(
-                    chave, nome, [("Build principal (Coach LoL)", principal),
+                    chave, nome, [("Build principal (Quíron)", principal),
                                   ("Opções contra o time inimigo", extras),
                                   ("Visão", ["2055"])]):
                 feitos.append("itens")
@@ -1460,7 +1559,7 @@ class SelecaoCampeoes:
         if not minha or minha.get("id") == self.vez_anunciada:
             return
         self.vez_anunciada = minha.get("id")
-        pool = POOL.get(funcao)
+        pool = pool_da_funcao(funcao)
         if not pool:
             return
         aliados, inimigos = self._times(sessao, eu)
@@ -1502,7 +1601,7 @@ class SelecaoCampeoes:
             print("  • " + extra)
 
     def falar_pool(self, funcao: str):
-        pool = POOL.get(funcao)
+        pool = pool_da_funcao(funcao)
         if not pool:
             self.voz.falar("Seleção de campeões.")
             return
@@ -1524,7 +1623,7 @@ class SelecaoCampeoes:
         return (v + 1) / (v + d + 2)  # suaviza amostras pequenas
 
     def falar_notas(self, funcao: str):
-        pool = POOL.get(funcao, [])
+        pool = pool_da_funcao(funcao)
         notas = []
         engaje = sorted(self.inimigos_vistos & ENGAJE)
         resposta = [c for c in ("Morgana", "Milio") if c in pool]
@@ -1566,13 +1665,19 @@ def rodar(parar: threading.Event | None = None, voz: "Voz | None" = None,
     selecao = (SelecaoCampeoes(voz, campeoes, cliente, itens, carregar_runas())
                if campeoes else None)
     sessao = requests.Session()
-    print("Coach LoL rodando. Aguardando partida...")
+    print("Quíron rodando. Aguardando partida...")
     estado("Aguardando partida")
 
     falhas = 0
     proxima_leitura = 0.0
     ultimo_estado = ""
     while not parar.is_set():
+        # microfone aberto só quando faz sentido (ver OuvidoComandos)
+        if ouvido and ouvido.ativo:
+            quer = CONFIG["comandos_de_voz"] and (coach.em_partida
+                                                  or not CONFIG["microfone_so_na_partida"])
+            if quer != ouvido.escutar.is_set():
+                ouvido.ligar_microfone(quer)
         # comandos de voz respondem rápido (a cada 0,2 s)
         if ouvido and ouvido.ativo and CONFIG["comandos_de_voz"]:
             for cmd in ouvido.pegar():
@@ -1617,11 +1722,13 @@ def rodar(parar: threading.Event | None = None, voz: "Voz | None" = None,
         time.sleep(0.2)
     if coach.em_partida:
         coach.fim_partida()
+    if ouvido:
+        ouvido.ligar_microfone(False)
     estado("Parado")
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Coach LoL por voz (API oficial local)")
+    ap = argparse.ArgumentParser(description="Quíron: coach por voz (API oficial local)")
     ap.add_argument("--sem-voz", action="store_true", help="só mostra os avisos no terminal")
     ap.add_argument("--sem-microfone", action="store_true", help="desliga os comandos de voz")
     args = ap.parse_args()

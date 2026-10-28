@@ -1,16 +1,18 @@
-# Coach LoL
+# Quíron
 
 Coach por voz para League of Legends, feito para ajudar a subir de elo **dentro das regras da Riot**.
 
-> Coach LoL não é endossado pela Riot Games. League of Legends é marca registrada da Riot Games, Inc.
+> Quíron não é endossado pela Riot Games. League of Legends é marca registrada da Riot Games, Inc.
 
 ## Instalar
 
-Baixe o `CoachLoL-Setup-<versão>.exe` mais recente em [Releases](../../releases) e execute.
+Baixe o `Quiron-Setup-<versão>.exe` mais recente em [Releases](../../releases) e execute.
 Instala só para o seu usuário (sem administrador) e aparece em *Configurações → Aplicativos*.
 O app avisa quando sai versão nova e se atualiza com um clique.
 
 ## O que ele faz
+
+Na primeira vez, o Quíron pergunta seu Riot ID, elo, funções e campeões (pool). Tudo é ajustado a partir disso e pode ser mudado em *Configurações → Perfil*.
 
 - **Cliente do LoL:** aceita a fila sozinho e importa a página de runas e o conjunto de itens do campeão escolhido.
 - **Draft:** seu histórico na função, a melhor escolha do seu pool na sua vez (com os motivos) e, quando o draft fecha, os pontos positivos e de atenção do seu time.
@@ -20,11 +22,16 @@ O app avisa quando sai versão nova e se atualiza com um clique.
 - **Fim da partida:** resumo falado, alerta de sequência de derrotas e de jogo de madrugada.
 - **Relatório:** evolução de participação em abates, mortes antes dos 14 min, por campeão e por horário.
 - **Comandos de voz** (offline): "coach itens", "coach silêncio", "coach volta", "coach anota".
-- **Builds editáveis** no app; as builds do patch novo são publicadas em `builds.json` e baixadas automaticamente.
+- **Builds para qualquer campeão:** os campeões em `builds.json` têm build pesquisada a cada patch; os demais recebem uma build genérica pela classe (mago, atirador, tanque...). No app, *Pedir build pesquisada* abre um pedido aqui no GitHub, e a atualização semanal inclui o campeão.
+- **Builds editáveis** no app; suas edições ficam só no seu PC e têm prioridade.
+
+## Som e microfone
+
+Os comandos de voz abrem o microfone só durante a partida. Com fone Bluetooth, microfone aberto faz o Windows trocar o fone para o modo "telefone" (som mais abafado); em *Configurações → Voz* dá para escolher outro microfone.
 
 ## Regras
 
-O coach usa apenas a [Live Client Data API](https://developer.riotgames.com/docs/lol#game-client-api) oficial (só roda no seu PC) e mostra só informação que já está na sua tela.
+O Quíron usa apenas a [Live Client Data API](https://developer.riotgames.com/docs/lol#game-client-api) oficial (só roda no seu PC) e mostra só informação que já está na sua tela.
 Não lê memória do jogo, não lê a tela, não rastreia recargas de feitiços ou ultimates inimigos e só **informa** — a decisão é sua.
 Avisos durante a partida podem ser desligados (modo "antes e depois").
 

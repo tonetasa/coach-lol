@@ -1,12 +1,12 @@
-﻿; Instalador do Coach LoL (Inno Setup 6)
+﻿; Instalador do Quíron (Inno Setup 6)
 ; Usado pelo criar_instalador.bat — a versão vem do versao.py.
 
-#define AppName "Coach LoL"
+#define AppName "Quíron"
 #ifndef AppVersion
   #define AppVersion "1.0.0"
 #endif
 #define AppPublisher "Matheus"
-#define AppExe "CoachLoL.exe"
+#define AppExe "Quiron.exe"
 
 [Setup]
 AppId={{0AFCABE1-A057-4110-B1E7-4858EAF3A410}
@@ -20,7 +20,7 @@ DefaultDirName={autopf}\Coach LoL
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 OutputDir=instalador
-OutputBaseFilename=CoachLoL-Setup-{#AppVersion}
+OutputBaseFilename=Quiron-Setup-{#AppVersion}
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
 SetupIconFile=icone.ico
@@ -40,6 +40,12 @@ Name: "ptbr"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
 [Tasks]
 Name: "desktopicon"; Description: "Criar atalho na Área de Trabalho"; GroupDescription: "Atalhos:"
 
+[InstallDelete]
+; restos da versão com o nome antigo (Coach LoL)
+Type: files; Name: "{app}\CoachLoL.exe"
+Type: files; Name: "{autodesktop}\Coach LoL.lnk"
+Type: filesandordirs; Name: "{autoprograms}\Coach LoL"
+
 [Files]
 Source: "dist\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -50,7 +56,8 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 
 [Registry]
 ; remove a entrada "Iniciar com o Windows" (criada pelo app) ao desinstalar
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "CoachLoL"; ValueType: none; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "Quiron"; ValueType: none; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "CoachLoL"; ValueType: none; Flags: deletevalue uninsdeletevalue
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Abrir o {#AppName} agora"; Flags: nowait postinstall skipifsilent
@@ -65,12 +72,15 @@ var
 begin
   if CurUninstallStep = usPostUninstall then
   begin
-    Dados := ExpandConstant('{userappdata}\CoachLoL');
+    Dados := ExpandConstant('{userappdata}\Quiron');
     if DirExists(Dados) then
       if MsgBox('Apagar também o histórico de partidas, as configurações e o modelo de voz?' + #13#10 + #13#10 +
                 'Pasta: ' + Dados + #13#10 + #13#10 +
                 'Escolha "Não" se quiser manter seu histórico para uma reinstalação.',
                 mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+      begin
         DelTree(Dados, True, True, True);
+        DelTree(ExpandConstant('{userappdata}\CoachLoL'), True, True, True);
+      end;
   end;
 end;

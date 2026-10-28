@@ -1,5 +1,5 @@
 """
-Coach LoL — app para Windows
+Quíron — app para Windows
 ============================
 
 Interface do coach: abas Coach, Builds, Relatório e Configurações, ícone na
@@ -26,7 +26,8 @@ import relatorio_lol as relatorio
 from versao import AVISO, VERSAO
 
 URL_BUILDS = "https://claude.ai/artifact/DNv4gfXzbRkregwhFNtQ4N"
-NOME_REGISTRO = "CoachLoL"
+NOME_REGISTRO = "Quiron"
+NOME_REGISTRO_ANTIGO = "CoachLoL"
 PASTA_RECURSOS = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
 
 # Paleta (combina com o ícone). Pares = (tema claro, tema escuro)
@@ -54,9 +55,9 @@ CLIENTE = [
     ("analise_draft", "Análise do draft",
      "Quando o draft fecha: pontos positivos e de atenção do seu time.", False),
     ("importar_runas", "Importar runas",
-     "Cria a página “Coach LoL” do campeão escolhido.", False),
+     "Cria a página “Quíron” do campeão escolhido.", False),
     ("importar_itens", "Importar itens",
-     "Cria o conjunto de itens “Coach LoL” que aparece na loja.", False),
+     "Cria o conjunto de itens “Quíron” que aparece na loja.", False),
     ("importar_feiticos", "Trocar feitiços de invocador",
      "Usa os feitiços da build (mantém o Flash na tecla de sempre).", False),
 ]
@@ -109,6 +110,10 @@ def iniciar_com_windows(ligar: bool) -> bool:
                 winreg.DeleteValue(k, NOME_REGISTRO)
             except FileNotFoundError:
                 pass
+        try:  # entrada da versão antiga (Coach LoL)
+            winreg.DeleteValue(k, NOME_REGISTRO_ANTIGO)
+        except FileNotFoundError:
+            pass
     return True
 
 
@@ -146,13 +151,16 @@ class App(ctk.CTk):
 
         self.migrados = coach.migrar_dados_antigos() if getattr(sys, "frozen", False) else 0
         registro.configurar(coach.BASE, VERSAO)
+        ja_usava = coach.CONFIG_ARQ.exists()   # quem já usava antes do perfil existir
         coach.carregar_config()
+        self.precisa_perfil = not coach.perfil()["funcoes"]
+        self.perfil_sugerido = coach.PERFIL_ANTIGO if (self.precisa_perfil and ja_usava) else None
         coach.carregar_builds()
         self.info_atualizacao: dict | None = None
         sys.stdout = SaidaParaFila(self.fila)
         sys.stderr = SaidaParaFila(self.fila)
 
-        self.title(f"Coach LoL {VERSAO}")
+        self.title(f"Quíron {VERSAO}")
         self.geometry("760x660")
         self.minsize(640, 560)
         try:
@@ -198,7 +206,7 @@ class App(ctk.CTk):
     def _montar(self):
         topo = ctk.CTkFrame(self, fg_color="transparent")
         topo.pack(fill="x", padx=20, pady=(16, 0))
-        ctk.CTkLabel(topo, text="Coach LoL", font=self.f_titulo).pack(side="left")
+        ctk.CTkLabel(topo, text="Quíron", font=self.f_titulo).pack(side="left")
         ctk.CTkLabel(topo, text=f"  v{VERSAO}", font=self.f_peq,
                      text_color=TEXTO2).pack(side="left", pady=(8, 0))
 
@@ -289,30 +297,63 @@ class App(ctk.CTk):
         nomes_funcao = {"JUNGLE": "Caçador", "UTILITY": "Suporte", "TOP": "Topo",
                         "MIDDLE": "Meio", "BOTTOM": "Atirador"}
         stats = coach.estatisticas_pool()
-        for cid, b in coach.BUILDS.items():
-            card = self._cartao(self.lista_builds)
-            card.pack(fill="x", padx=2, pady=4)
-            topo = ctk.CTkFrame(card, fg_color="transparent")
-            topo.pack(fill="x", padx=16, pady=(10, 2))
-            ctk.CTkLabel(topo, text=self._nome_campeao(cid), font=self.f_sub).pack(side="left")
-            ctk.CTkLabel(topo, text=f"   {nomes_funcao.get(b['funcao'], b['funcao'])} · "
-                         f"runa {b['runas']}", font=self.f_peq,
-                         text_color=TEXTO2).pack(side="left", pady=(2, 0))
-            if b.get("personalizado"):
-                ctk.CTkLabel(topo, text="  personalizada", font=self.f_peq,
-                             text_color=OURO).pack(side="left", pady=(2, 0))
-            self._botao_secundario(topo, "Editar", lambda c=cid: self._editar_build(c),
-                                   70).pack(side="right")
-            if b.get("personalizado"):
-                self._botao_secundario(topo, "Restaurar", lambda c=cid: self._restaurar(c),
-                                       80).pack(side="right", padx=6)
-            v, d = stats.get(cid, (0, 0))
-            if v + d:
-                ctk.CTkLabel(topo, text=f"{round(100 * v / (v + d))}% em {v + d}   ",
-                             font=self.f_peq, text_color=OURO).pack(side="right")
-            itens = "   →   ".join(self.itens.nome_pt(i) for i in b["itens"]) or "(sem itens)"
-            ctk.CTkLabel(card, text=itens, font=self.f_txt, justify="left",
-                         wraplength=640).pack(anchor="w", padx=16, pady=(0, 12))
+        pool = coach.todos_do_pool()
+        outros = [c for c in coach.BUILDS if c not in pool]
+        if not pool:
+            ctk.CTkLabel(self.lista_builds, text="Configure seu pool em Configurações → Perfil "
+                         "para ver as builds dos seus campeões aqui.", font=self.f_txt,
+                         text_color=TEXTO2).pack(anchor="w", padx=6, pady=(0, 6))
+        for titulo, lista in (("Seu pool", pool), ("Outras builds", outros)):
+            if not lista:
+                continue
+            ctk.CTkLabel(self.lista_builds, text=titulo, font=self.f_sub).pack(
+                anchor="w", padx=6, pady=(8, 2))
+            for cid in lista:
+                b = coach.obter_build(cid, self.campeoes)
+                if not b:
+                    continue
+                card = self._cartao(self.lista_builds)
+                card.pack(fill="x", padx=2, pady=4)
+                topo = ctk.CTkFrame(card, fg_color="transparent")
+                topo.pack(fill="x", padx=16, pady=(10, 2))
+                ctk.CTkLabel(topo, text=self._nome_campeao(cid), font=self.f_sub).pack(side="left")
+                ctk.CTkLabel(topo, text=f"   {nomes_funcao.get(b['funcao'], b['funcao'])} · "
+                             f"runa {b['runas']}", font=self.f_peq,
+                             text_color=TEXTO2).pack(side="left", pady=(2, 0))
+                selo = ("personalizada" if b.get("personalizado") else
+                        "genérica" if b.get("generica") else "")
+                if selo:
+                    ctk.CTkLabel(topo, text=f"  {selo}", font=self.f_peq,
+                                 text_color=OURO if selo == "personalizada" else CINZA).pack(
+                        side="left", pady=(2, 0))
+                self._botao_secundario(topo, "Editar", lambda c=cid: self._editar_build(c),
+                                       70).pack(side="right")
+                if b.get("personalizado"):
+                    self._botao_secundario(topo, "Restaurar", lambda c=cid: self._restaurar(c),
+                                           80).pack(side="right", padx=6)
+                if b.get("generica"):
+                    self._botao_secundario(topo, "Pedir build pesquisada",
+                                           lambda c=cid: self._pedir_build(c), 160).pack(
+                        side="right", padx=6)
+                v, d = stats.get(cid, (0, 0))
+                if v + d:
+                    ctk.CTkLabel(topo, text=f"{round(100 * v / (v + d))}% em {v + d}   ",
+                                 font=self.f_peq, text_color=OURO).pack(side="right")
+                itens = "   →   ".join(self.itens.nome_pt(i) for i in b["itens"]) or "(sem itens)"
+                ctk.CTkLabel(card, text=itens, font=self.f_txt, justify="left",
+                             wraplength=640).pack(anchor="w", padx=16, pady=(0, 12))
+
+    def _pedir_build(self, cid):
+        from urllib.parse import quote
+        nome = self._nome_campeao(cid)
+        b = coach.obter_build(cid, self.campeoes) or {}
+        corpo = (f"Campeão: {nome} ({cid})\nFunção: {b.get('funcao', '?')}\n\n"
+                 "Pedido feito pelo app Quíron. A tarefa semanal pesquisa a build e adiciona "
+                 "ao builds.json.")
+        webbrowser.open(f"https://github.com/{coach.REPO_GITHUB}/issues/new?title="
+                        f"{quote('Build: ' + nome)}&body={quote(corpo)}")
+        self._escrever(f"Abrindo o pedido de build para {nome} no GitHub "
+                       "(precisa estar logado). A build chega na próxima atualização semanal.\n")
 
     def _nome_campeao(self, cid):
         return self.campeoes.get(cid, {}).get("name", cid)
@@ -533,12 +574,21 @@ class App(ctk.CTk):
             ctk.CTkLabel(txt, text=titulo, font=self.f_txt).pack(anchor="w")
             if desc:
                 ctk.CTkLabel(txt, text=desc, font=self.f_peq, text_color=TEXTO2,
-                             justify="left").pack(anchor="w")
+                             justify="left", wraplength=540).pack(anchor="w")
             sw = ctk.CTkSwitch(linha, text="", progress_color=AZUL, width=46)
             sw.pack(side="right")
             sw.select() if valor else sw.deselect()
             sw.configure(command=lambda: ao_mudar(bool(sw.get())))
             return sw
+
+        perf = secao("Perfil")
+        linha = ctk.CTkFrame(perf, fg_color="transparent")
+        linha.pack(fill="x", padx=16, pady=12)
+        self.perfil_txt = ctk.CTkLabel(linha, text=coach.texto_perfil(), font=self.f_txt,
+                                       wraplength=480, justify="left", anchor="w")
+        self.perfil_txt.pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(linha, text="Editar perfil", width=110, fg_color=AZUL,
+                      hover_color=AZUL_HOVER, command=lambda: EditorPerfil(self)).pack(side="right")
 
         voz = secao("Voz")
         interruptor(voz, "Falar os avisos", "Usa a voz do Windows.",
@@ -547,6 +597,26 @@ class App(ctk.CTk):
                     "“coach itens”, “coach silêncio”, “coach volta”, “coach anota”.",
                     coach.CONFIG["comandos_de_voz"],
                     lambda v: coach.salvar_config({"comandos_de_voz": v}))
+        interruptor(voz, "Microfone só durante a partida",
+                    "Recomendado: microfone aberto deixa fones Bluetooth no modo “telefone” "
+                    "e abaixa o som de outros apps (Spotify, Discord).",
+                    coach.CONFIG["microfone_so_na_partida"],
+                    lambda v: coach.salvar_config({"microfone_so_na_partida": v}))
+        linha = ctk.CTkFrame(voz, fg_color="transparent")
+        linha.pack(fill="x", padx=16, pady=(4, 12))
+        txt = ctk.CTkFrame(linha, fg_color="transparent")
+        txt.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(txt, text="Microfone dos comandos", font=self.f_txt).pack(anchor="w")
+        ctk.CTkLabel(txt, text="Com fone Bluetooth, usar outro microfone (webcam, mesa) mantém "
+                     "o som do fone limpo.", font=self.f_peq, text_color=TEXTO2,
+                     wraplength=380, justify="left").pack(anchor="w")
+        opcoes = ["Padrão do Windows"] + coach.listar_microfones()
+        self.mic = ctk.CTkOptionMenu(linha, values=opcoes, fg_color=AZUL, button_color=AZUL_HOVER,
+                                     width=220, dynamic_resizing=False,
+                                     command=lambda v: coach.salvar_config(
+                                         {"microfone": "" if v == "Padrão do Windows" else v}))
+        self.mic.set(coach.CONFIG["microfone"] or "Padrão do Windows")
+        self.mic.pack(side="right")
 
         def grupo(titulo, lista):
             c = secao(titulo)
@@ -638,7 +708,7 @@ class App(ctk.CTk):
             side="right")
 
         sobre = secao("Sobre")
-        ctk.CTkLabel(sobre, text=f"Coach LoL {VERSAO}", font=self.f_sub).pack(
+        ctk.CTkLabel(sobre, text=f"Quíron {VERSAO}", font=self.f_sub).pack(
             anchor="w", padx=16, pady=(12, 0))
         ctk.CTkLabel(sobre, text=AVISO, font=self.f_peq, text_color=TEXTO2, wraplength=620,
                      justify="left").pack(anchor="w", padx=16, pady=(2, 8))
@@ -821,7 +891,7 @@ class App(ctk.CTk):
         self.ponto.configure(text_color=cor)
         self.dica.configure(text=dicas.get(texto, padrao))
         if self.bandeja:
-            self.bandeja.title = f"Coach LoL — {texto}"
+            self.bandeja.title = f"Quíron — {texto}"
 
     def _ler_fila(self):
         try:
@@ -842,6 +912,9 @@ class App(ctk.CTk):
                 elif tipo == "campeoes":
                     self.campeoes = valor
                     self._preencher_builds()
+                    if self.precisa_perfil and valor:
+                        self.precisa_perfil = False
+                        self.after(300, lambda: EditorPerfil(self, primeira_vez=True))
                 elif tipo == "builds":
                     self._preencher_builds()
                 elif tipo == "chat":
@@ -869,14 +942,14 @@ class App(ctk.CTk):
             from PIL import Image
             imagem = Image.open(PASTA_RECURSOS / "icone.ico")
             menu = pystray.Menu(
-                pystray.MenuItem("Abrir Coach LoL",
+                pystray.MenuItem("Abrir Quíron",
                                  lambda: self.fila.put(("mostrar", None)), default=True),
                 pystray.MenuItem(lambda _: "Parar coach" if self._rodando() else "Iniciar coach",
                                  lambda: self.fila.put(("alternar", None))),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Sair", lambda: self.fila.put(("sair", None))),
             )
-            self.bandeja = pystray.Icon("CoachLoL", imagem, "Coach LoL", menu)
+            self.bandeja = pystray.Icon("Quiron", imagem, "Quíron", menu)
             self.bandeja.run_detached()
         except Exception:  # noqa: BLE001 (sem bandeja, o app funciona igual)
             self.bandeja = None
@@ -902,8 +975,8 @@ class App(ctk.CTk):
             if not getattr(self, "_avisou_bandeja", False):
                 self._avisou_bandeja = True
                 try:
-                    self.bandeja.notify("O Coach LoL continua rodando aqui. Para sair, clique "
-                                        "com o botão direito no ícone.", "Coach LoL")
+                    self.bandeja.notify("O Quíron continua rodando aqui. Para sair, clique "
+                                        "com o botão direito no ícone.", "Quíron")
                 except Exception:  # noqa: BLE001
                     pass
         else:
@@ -921,12 +994,181 @@ class App(ctk.CTk):
         self.destroy()
 
 
+class EditorPerfil(ctk.CTkToplevel):
+    """Primeiro uso / editar perfil: Riot ID, elo, funções e pool por função."""
+
+    SERVIDORES = ["BR", "LAN", "LAS", "NA", "EUW", "EUNE", "KR", "JP", "OCE", "TR", "RU",
+                  "ME", "SEA", "TW", "VN"]
+    TIERS = ["Sem ranque", "Ferro", "Bronze", "Prata", "Ouro", "Platina", "Esmeralda",
+             "Diamante", "Mestre", "Grão-Mestre", "Desafiante"]
+    DIVISOES = ["IV", "III", "II", "I"]
+    NOMES = {"TOP": "Topo", "JUNGLE": "Caçador", "MIDDLE": "Meio", "BOTTOM": "Atirador",
+             "UTILITY": "Suporte"}
+    MAX_POOL = 6
+
+    def __init__(self, app: App, primeira_vez: bool = False):
+        super().__init__(app, fg_color=FUNDO)
+        self.app = app
+        self.title("Bem-vindo ao Quíron" if primeira_vez else "Seu perfil")
+        self.geometry("620x720")
+        self.transient(app)
+        self.after(100, self.grab_set)
+        atual = coach.perfil()
+        if not atual["funcoes"] and app.perfil_sugerido:
+            atual = coach.perfil() | app.perfil_sugerido
+        self.pool = {f: list(c) for f, c in atual["pool"].items()}
+        self.por_nome = {c["name"]: k for k, c in app.campeoes.items()}
+        self.nomes_campeoes = sorted(self.por_nome)
+
+        corpo = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        corpo.pack(fill="both", expand=True, padx=12, pady=(12, 0))
+        if primeira_vez:
+            ctk.CTkLabel(corpo, text="Vamos configurar o seu coach", font=app.f_titulo).pack(
+                anchor="w", pady=(0, 2))
+            ctk.CTkLabel(corpo, text="O Quíron usa isso para sugerir campeões no draft, "
+                         "importar builds e personalizar o chat. Dá para mudar depois em "
+                         "Configurações → Perfil.", font=app.f_txt, text_color=TEXTO2,
+                         wraplength=560, justify="left").pack(anchor="w", pady=(0, 10))
+
+        def rotulo(t):
+            ctk.CTkLabel(corpo, text=t, font=app.f_peq, text_color=TEXTO2).pack(
+                anchor="w", pady=(10, 2))
+
+        rotulo("Riot ID (Nome#TAG)")
+        linha = ctk.CTkFrame(corpo, fg_color="transparent")
+        linha.pack(fill="x")
+        self.riot = ctk.CTkEntry(linha, border_color=BORDA, placeholder_text="Nome#TAG")
+        if atual["riot_id"]:
+            self.riot.insert(0, atual["riot_id"])
+        self.riot.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.servidor = ctk.CTkOptionMenu(linha, values=self.SERVIDORES, width=90,
+                                          fg_color=AZUL, button_color=AZUL_HOVER)
+        self.servidor.set(atual["servidor"] or "BR")
+        self.servidor.pack(side="left")
+
+        rotulo("Elo atual")
+        linha = ctk.CTkFrame(corpo, fg_color="transparent")
+        linha.pack(fill="x")
+        tier, div = (atual["elo"].split(" ") + [""])[:2] if atual["elo"] else ("Sem ranque", "")
+        self.tier = ctk.CTkOptionMenu(linha, values=self.TIERS, fg_color=AZUL,
+                                      button_color=AZUL_HOVER, command=lambda _: self._div_estado())
+        self.tier.set(tier if tier in self.TIERS else "Sem ranque")
+        self.tier.pack(side="left", padx=(0, 8))
+        self.div = ctk.CTkOptionMenu(linha, values=self.DIVISOES, width=80, fg_color=AZUL,
+                                     button_color=AZUL_HOVER)
+        self.div.set(div if div in self.DIVISOES else "IV")
+        self.div.pack(side="left")
+        self._div_estado()
+
+        rotulo("Funções que você joga")
+        linha = ctk.CTkFrame(corpo, fg_color="transparent")
+        linha.pack(fill="x")
+        self.funcoes = {}
+        for f in coach.FUNCOES:
+            cb = ctk.CTkCheckBox(linha, text=self.NOMES[f], fg_color=AZUL, hover_color=AZUL_HOVER,
+                                 command=self._montar_pools)
+            if f in atual["funcoes"]:
+                cb.select()
+            cb.pack(side="left", padx=(0, 12))
+            self.funcoes[f] = cb
+
+        rotulo(f"Campeões por função (até {self.MAX_POOL})")
+        self.area_pool = ctk.CTkFrame(corpo, fg_color="transparent")
+        self.area_pool.pack(fill="x")
+        self._montar_pools()
+
+        bts = ctk.CTkFrame(self, fg_color="transparent")
+        bts.pack(fill="x", padx=20, pady=12)
+        ctk.CTkButton(bts, text="Salvar", fg_color=AZUL, hover_color=AZUL_HOVER,
+                      command=self._salvar).pack(side="right")
+        app._botao_secundario(bts, "Agora não" if primeira_vez else "Cancelar",
+                              self.destroy, 100).pack(side="right", padx=8)
+        self.erro = ctk.CTkLabel(bts, text="", text_color=("#c4372f", "#f0706a"),
+                                 font=app.f_peq)
+        self.erro.pack(side="left")
+
+    def _div_estado(self):
+        sem_div = self.tier.get() in ("Sem ranque", "Mestre", "Grão-Mestre", "Desafiante")
+        self.div.configure(state="disabled" if sem_div else "normal")
+
+    def _selecionadas(self):
+        return [f for f in coach.FUNCOES if self.funcoes[f].get()]
+
+    def _montar_pools(self):
+        for w in self.area_pool.winfo_children():
+            w.destroy()
+        sel = self._selecionadas()
+        if not sel:
+            ctk.CTkLabel(self.area_pool, text="Marque pelo menos uma função.",
+                         font=self.app.f_peq, text_color=TEXTO2).pack(anchor="w")
+        for f in sel:
+            card = self.app._cartao(self.area_pool)
+            card.pack(fill="x", pady=4)
+            ctk.CTkLabel(card, text=self.NOMES[f], font=self.app.f_sub).pack(
+                anchor="w", padx=14, pady=(8, 4))
+            chips = ctk.CTkFrame(card, fg_color="transparent")
+            chips.pack(fill="x", padx=14)
+            for cid in self.pool.get(f, []):
+                nome = self.app.campeoes.get(cid, {}).get("name", cid)
+                ctk.CTkButton(chips, text=f"{nome}  ✕", width=20, height=26, fg_color=BORDA,
+                              hover_color=CINZA, text_color=TEXTO,
+                              command=lambda f=f, c=cid: self._remover(f, c)).pack(
+                    side="left", padx=(0, 6), pady=2)
+            linha = ctk.CTkFrame(card, fg_color="transparent")
+            linha.pack(fill="x", padx=14, pady=(4, 10))
+            cb = ctk.CTkComboBox(linha, values=self.nomes_campeoes, border_color=BORDA, width=240)
+            cb.set("")
+            cb.pack(side="left", padx=(0, 8))
+            cb.bind("<KeyRelease>", lambda e, c=cb: EditorBuild._filtrar(c, self.nomes_campeoes))
+            ctk.CTkButton(linha, text="Adicionar", width=90, fg_color=AZUL, hover_color=AZUL_HOVER,
+                          command=lambda f=f, c=cb: self._adicionar(f, c.get())).pack(side="left")
+
+    def _adicionar(self, funcao, nome):
+        cid = self.por_nome.get(nome.strip())
+        if not cid:
+            self.erro.configure(text="Escolha um campeão da lista.")
+            return
+        lista = self.pool.setdefault(funcao, [])
+        if cid not in lista and len(lista) < self.MAX_POOL:
+            lista.append(cid)
+        self.erro.configure(text="")
+        self._montar_pools()
+
+    def _remover(self, funcao, cid):
+        self.pool[funcao] = [c for c in self.pool.get(funcao, []) if c != cid]
+        self._montar_pools()
+
+    def _salvar(self):
+        funcoes = self._selecionadas()
+        if not funcoes:
+            self.erro.configure(text="Marque pelo menos uma função.")
+            return
+        pool = {f: self.pool.get(f, []) for f in funcoes}
+        if not any(pool.values()):
+            self.erro.configure(text="Adicione pelo menos um campeão.")
+            return
+        riot = self.riot.get().strip()
+        if riot and "#" not in riot:
+            self.erro.configure(text="O Riot ID tem o formato Nome#TAG.")
+            return
+        tier = self.tier.get()
+        elo = "" if tier == "Sem ranque" else (
+            tier if tier in ("Mestre", "Grão-Mestre", "Desafiante") else f"{tier} {self.div.get()}")
+        coach.salvar_config({"perfil": {"riot_id": riot, "servidor": self.servidor.get(),
+                                        "elo": elo, "funcoes": funcoes, "pool": pool}})
+        self.app.perfil_txt.configure(text=coach.texto_perfil())
+        self.app._preencher_builds()
+        self.app._escrever("Perfil salvo.\n")
+        self.destroy()
+
+
 class EditorBuild(ctk.CTkToplevel):
     """Janela para editar (ou criar) a build de um campeão."""
 
     FUNCOES = {"Caçador": "JUNGLE", "Suporte": "UTILITY", "Topo": "TOP", "Meio": "MIDDLE",
                "Atirador": "BOTTOM"}
-    TIPOS = {"Mago / dano": "mago", "Encantador / proteção": "encantador"}
+    TIPOS = {"Mago / dano mágico": "mago", "Encantador / proteção": "encantador",
+             "Dano físico": "fisico", "Tanque": "tanque"}
 
     def __init__(self, app: App, cid: str | None):
         super().__init__(app, fg_color=FUNDO)
@@ -935,7 +1177,8 @@ class EditorBuild(ctk.CTkToplevel):
         self.geometry("520x600")
         self.transient(app)
         self.after(100, self.grab_set)
-        b = coach.BUILDS.get(cid, {}) if cid else {}
+        b = (coach.obter_build(cid, getattr(app, "campeoes", {})) or {}) if cid else {}
+        self.base = b
         f = ctk.CTkFrame(self, fg_color="transparent")
         f.pack(fill="both", expand=True, padx=20, pady=16)
 
@@ -1016,12 +1259,18 @@ class EditorBuild(ctk.CTkToplevel):
         if not itens:
             self.erro.configure(text="Coloque pelo menos um item.")
             return
-        coach.salvar_build_usuario(cid, {
+        nova = {
             "funcao": self.FUNCOES[self.funcao.get()],
             "runas": self.runa.get().strip() or "—",
             "itens": itens,
             "ajustes": self.TIPOS[self.tipo.get()],
-        })
+        }
+        if not self.cid:  # campeão novo: começa da build genérica (runas e feitiços)
+            self.base = coach.obter_build(cid, self.app.campeoes, nova["funcao"]) or {}
+        for k in ("pagina", "feiticos"):
+            if self.base.get(k):
+                nova[k] = self.base[k]
+        coach.salvar_build_usuario(cid, nova)
         self.app._preencher_builds()
         self.app._escrever(f"Build de {self.app._nome_campeao(cid)} salva.\n")
         self.destroy()

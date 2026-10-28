@@ -2,8 +2,8 @@
 
 Faz três coisas fora da partida:
   - aceita a fila automaticamente;
-  - cria/atualiza a página de runas "Coach LoL" do campeão escolhido;
-  - cria o conjunto de itens "Coach LoL" do campeão (aparece na loja).
+  - cria/atualiza a página de runas "Quíron" do campeão escolhido;
+  - cria o conjunto de itens "Quíron" do campeão (aparece na loja).
 
 A Riot diz que essa API não tem suporte oficial para apps de terceiros: ela
 funciona e é usada por apps conhecidos, mas pode mudar sem aviso.
@@ -16,7 +16,8 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-NOME_PAGINA = "Coach LoL"
+NOME_PAGINA = "Quíron"
+NOMES_ANTIGOS = ("Coach LoL",)  # páginas e conjuntos criados por versões antigas
 
 # Fragmentos (linhas: ataque, flexível, defesa)
 FRAGMENTOS = {
@@ -75,10 +76,10 @@ class ClienteLoL:
     # -- runas ---------------------------------------------------------------
     def importar_runas(self, primaria: int, secundaria: int, perks: list[int],
                        nome: str = NOME_PAGINA) -> str:
-        """Substitui a página "Coach LoL" (ou cria). Retorna mensagem do resultado."""
+        """Substitui a página "Quíron" (ou cria). Retorna mensagem do resultado."""
         paginas = self.get("/lol-perks/v1/pages") or []
         for p in paginas:
-            if p.get("name", "").startswith(NOME_PAGINA) and p.get("isDeletable", True):
+            if p.get("name", "").startswith((NOME_PAGINA,) + NOMES_ANTIGOS) and p.get("isDeletable", True):
                 self.pedir("DELETE", f"/lol-perks/v1/pages/{p['id']}")
         corpo = {"name": nome, "primaryStyleId": primaria, "subStyleId": secundaria,
                  "selectedPerkIds": perks, "current": True}
@@ -97,14 +98,15 @@ class ClienteLoL:
     # -- itens ---------------------------------------------------------------
     def importar_itens(self, chave_campeao: int, nome_campeao: str,
                        blocos: list[tuple[str, list[str]]]) -> bool:
-        """Cria o conjunto de itens "Coach LoL - <campeão>" para Summoner's Rift."""
+        """Cria o conjunto de itens "Quíron - <campeão>" para Summoner's Rift."""
         eu = self.get("/lol-summoner/v1/current-summoner")
         if not eu:
             return False
         sid = eu.get("summonerId")
         atual = self.get(f"/lol-item-sets/v1/item-sets/{sid}/sets") or {}
         sets = [s for s in atual.get("itemSets", [])
-                if not s.get("title", "").startswith(f"{NOME_PAGINA} - {nome_campeao}")]
+                if not any(s.get("title", "").startswith(f"{n} - {nome_campeao}")
+                           for n in (NOME_PAGINA,) + NOMES_ANTIGOS)]
         sets.insert(0, {
             "title": f"{NOME_PAGINA} - {nome_campeao}",
             "associatedChampions": [chave_campeao],
@@ -113,7 +115,7 @@ class ClienteLoL:
                        for titulo, ids in blocos if ids],
             "map": "any", "mode": "any", "preferredItemSlots": [], "sortrank": 0,
             "startedFrom": "blank", "type": "custom",
-            "uid": f"coach-lol-{chave_campeao}",
+            "uid": f"quiron-{chave_campeao}",
         })
         corpo = {"accountId": atual.get("accountId", eu.get("accountId")),
                  "itemSets": sets, "timestamp": atual.get("timestamp", 0)}

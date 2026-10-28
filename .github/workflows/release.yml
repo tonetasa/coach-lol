@@ -2,7 +2,7 @@ name: Instalador
 
 # A cada push na main: monta o instalador no Windows e guarda como artefato.
 # Se a VERSAO de versao.py ainda não tem Release, publica a Release v<VERSAO>
-# com o CoachLoL-Setup-<versão>.exe. O app instalado detecta e se atualiza.
+# com o Quiron-Setup-<versão>.exe. O app instalado detecta e se atualiza.
 # (Para lançar uma versão nova, basta mudar VERSAO e fazer push.)
 on:
   push:
@@ -35,7 +35,7 @@ jobs:
 
       - name: Executável
         run: >
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name CoachLoL
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name Quiron
           --icon icone.ico --version-file version_info.txt --add-data "icone.ico;."
           --hidden-import pyttsx3.drivers --hidden-import pyttsx3.drivers.sapi5
           --collect-submodules comtypes --collect-all vosk --collect-all sounddevice
@@ -48,13 +48,13 @@ jobs:
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
-          & $iscc /Q "/DAppVersion=${{ steps.versao.outputs.ver }}" CoachLoL.iss
+          & $iscc /Q "/DAppVersion=${{ steps.versao.outputs.ver }}" Quiron.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Guardar instalador (teste)
         uses: actions/upload-artifact@v4
         with:
-          name: CoachLoL-Setup-${{ steps.versao.outputs.ver }}
+          name: Quiron-Setup-${{ steps.versao.outputs.ver }}
           path: instalador/*.exe
 
       - name: Release já existe?
@@ -74,7 +74,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.versao.outputs.ver }}
-          name: Coach LoL ${{ steps.versao.outputs.ver }}
+          name: Quíron ${{ steps.versao.outputs.ver }}
           target_commitish: ${{ github.sha }}
           files: instalador/*.exe
           generate_release_notes: true
