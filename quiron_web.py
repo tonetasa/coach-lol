@@ -870,3 +870,43 @@ def _abrir(webview, api: Api, minimizado: bool):
     # gui="edgechromium": sem o WebView2, falha (e o app abre na interface clássica)
     webview.start(ao_iniciar, gui="edgechromium" if sys.platform == "win32" else None,
                   http_server=True, private_mode=False, storage_path=str(coach.BASE / "webview"))
+
+
+def teste_janela(saida: str):
+    """Abre a janela de verdade, percorre as abas e grava o resultado (build do GitHub)."""
+    import webview
+
+    api = Api()
+    resultado = {"etapas": []}
+
+    def gravar_e_sair(extra=None):
+        if extra:
+            resultado.update(extra)
+        Path(saida).write_text(json.dumps(resultado, ensure_ascii=False, indent=1), encoding="utf-8")
+        os._exit(0)
+
+    threading.Timer(120, lambda: gravar_e_sair({"erro": "tempo esgotado"})).start()
+    janela = webview.create_window("Quíron (teste)", str(PASTA_UI / "index.html"), js_api=api,
+                                   width=1120, height=900, background_color="#0b1118")
+    api._ligar_janela(janela)
+
+    def roteiro():
+        import time
+        threading.Thread(target=api._carregar_dados, daemon=True).start()
+        time.sleep(8)
+        js = ("JSON.stringify({versao: S.versao, abas: document.querySelectorAll('.aba').length,"
+              " tela: S.tela, botao: !!document.querySelector('#bt-coach'), erros: window.__erros})")
+        resultado["etapas"].append({"coach": json.loads(janela.evaluate_js(js))})
+        for tela, seletor in (("builds", ".build"), ("relatorio", ".tile"), ("config", ".sw")):
+            janela.evaluate_js(f"document.querySelectorAll('.veu').forEach(v => v.remove()); irPara('{tela}')")
+            time.sleep(4)
+            n = janela.evaluate_js(f"document.querySelectorAll('#tela-{tela} {seletor}').length")
+            resultado["etapas"].append({tela: n})
+        resultado["erros_js"] = json.loads(janela.evaluate_js("JSON.stringify(window.__erros)"))
+        resultado["ok"] = (resultado["etapas"][0]["coach"].get("botao") is True
+                           and all(list(e.values())[0] for e in resultado["etapas"][1:])
+                           and not resultado["erros_js"])
+        gravar_e_sair()
+
+    webview.start(roteiro, gui="edgechromium" if sys.platform == "win32" else None,
+                  http_server=True, private_mode=True)

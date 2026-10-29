@@ -53,6 +53,15 @@ jobs:
           Get-Content $saida
           if (-not (Get-Content $saida -Raw).StartsWith("OK")) { exit 1 }
 
+      - name: Abrir a janela e percorrer as abas
+        shell: pwsh
+        run: |
+          $saida = Join-Path $env:RUNNER_TEMP "janela.json"
+          $p = Start-Process -FilePath "dist\Quiron.exe" -ArgumentList "--teste-janela", "`"$saida`"" -Wait -PassThru
+          Get-Content $saida
+          $r = Get-Content $saida -Raw | ConvertFrom-Json
+          if (-not $r.ok) { exit 1 }
+
       - name: Inno Setup
         shell: pwsh
         run: |

@@ -1,5 +1,8 @@
 /* Quíron — interface. Fala com o Python por window.pywebview.api (ponte do pywebview). */
 "use strict";
+window.__erros = [];
+window.addEventListener("error", e => window.__erros.push(String(e.message)));
+window.addEventListener("unhandledrejection", e => window.__erros.push("promessa: " + String(e.reason)));
 
 // ---------------------------------------------------------------------------
 // Ponte com o Python

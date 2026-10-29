@@ -2029,6 +2029,9 @@ def main():
     """Abre a interface nova (HTML); sem WebView2 ou se ela falhar, a clássica."""
     if "--verificar-interface" in sys.argv:   # usado no build do GitHub
         return verificar_interface(sys.argv[sys.argv.index("--verificar-interface") + 1])
+    if "--teste-janela" in sys.argv:          # idem: abre a janela e percorre as abas
+        import quiron_web
+        return quiron_web.teste_janela(sys.argv[sys.argv.index("--teste-janela") + 1])
     minimizado = "--minimizado" in sys.argv
     classica = "--interface-classica" in sys.argv
     if not classica and webview2_instalado():
