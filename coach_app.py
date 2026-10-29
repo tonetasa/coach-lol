@@ -2,8 +2,10 @@
 Quíron — app para Windows
 ============================
 
-Interface do coach: abas Coach, Builds, Relatório e Configurações, ícone na
-bandeja (perto do relógio) e opção de iniciar junto com o Windows.
+Ponto de entrada do app. Abre a interface nova (quiron_web.py + pasta ui/,
+em HTML dentro do WebView2 do Windows). Este arquivo também guarda a
+interface clássica (CustomTkinter), usada quando o WebView2 não existe ou
+com o parâmetro --interface-classica.
 
 Rodar sem o instalador:   pythonw coach_app.py
 Gerar o instalador:       criar_instalador.bat
@@ -1988,8 +1990,56 @@ class EditorBuild(ctk.CTkToplevel):
         self.destroy()
 
 
+def webview2_instalado() -> bool:
+    """O WebView2 (navegador embutido do Windows) é o que desenha a interface nova."""
+    if sys.platform != "win32":
+        return True
+    import winreg
+    guid = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+    for raiz, caminho in ((winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{guid}"),
+                          (winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\Microsoft\EdgeUpdate\Clients\{guid}"),
+                          (winreg.HKEY_CURRENT_USER, rf"SOFTWARE\Microsoft\EdgeUpdate\Clients\{guid}")):
+        try:
+            with winreg.OpenKey(raiz, caminho) as k:
+                versao, _ = winreg.QueryValueEx(k, "pv")
+                if versao and versao != "0.0.0.0":
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def verificar_interface(saida: str):
+    """Confere se o executável tem tudo para abrir a interface nova."""
+    import traceback
+    try:
+        import quiron_web
+        import webview
+        if sys.platform == "win32":
+            from webview.platforms import winforms  # noqa: F401 (carrega o .NET e o WebView2)
+        assert (quiron_web.PASTA_UI / "index.html").exists(), "ui/index.html não veio no pacote"
+        assert (quiron_web.PASTA_UI / "fontes").is_dir(), "ui/fontes não veio no pacote"
+        texto = f"OK webview {getattr(webview, '__version__', '?')} webview2={webview2_instalado()}"
+    except Exception:  # noqa: BLE001
+        texto = "ERRO\n" + traceback.format_exc()
+    Path(saida).write_text(texto, encoding="utf-8")
+
+
 def main():
-    App(minimizado="--minimizado" in sys.argv).mainloop()
+    """Abre a interface nova (HTML); sem WebView2 ou se ela falhar, a clássica."""
+    if "--verificar-interface" in sys.argv:   # usado no build do GitHub
+        return verificar_interface(sys.argv[sys.argv.index("--verificar-interface") + 1])
+    minimizado = "--minimizado" in sys.argv
+    classica = "--interface-classica" in sys.argv
+    if not classica and webview2_instalado():
+        try:
+            import quiron_web
+            quiron_web.main(minimizado)
+            return
+        except Exception as e:  # noqa: BLE001
+            registro.configurar(coach.BASE, VERSAO)
+            registro.erro("A interface nova não abriu; usando a clássica", e)
+    App(minimizado=minimizado).mainloop()
 
 
 if __name__ == "__main__":

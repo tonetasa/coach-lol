@@ -12,6 +12,8 @@ O app avisa quando sai versão nova e se atualiza com um clique.
 
 ## O que ele faz
 
+Interface com quatro telas (Coach, Builds, Relatório e Configurações) no visual "hextech": status da partida, teia de desempenho (farm, visão, lutas, abates e sobrevivência), dica do dia, builds com a página de runas e avisos ao vivo. Ela usa o WebView2 do Windows; sem ele, o app abre na interface clássica (também dá para forçar com `Quiron.exe --interface-classica`).
+
 Na primeira vez, o Quíron pergunta seu Riot ID, elo, funções e campeões (pool). Tudo é ajustado a partir disso e pode ser mudado em *Configurações → Perfil*.
 
 - **Cliente do LoL:** aceita a fila sozinho e importa a página de runas e o conjunto de itens do campeão escolhido.

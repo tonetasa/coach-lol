@@ -5,7 +5,7 @@ echo.
 echo === Criando o instalador do Quiron ===
 echo.
 echo [1/4] Instalando as ferramentas do Python...
-python -m pip install --upgrade pyinstaller requests pyttsx3 vosk sounddevice customtkinter pystray pillow keyring
+python -m pip install --upgrade pyinstaller -r requirements.txt
 if errorlevel 1 goto erro
 
 echo.
@@ -19,6 +19,8 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed --name Quiron ^
   --collect-submodules comtypes --collect-all vosk --collect-all sounddevice ^
   --collect-all customtkinter --hidden-import pystray._win32 ^
   --hidden-import keyring.backends.Windows ^
+  --add-data "ui;ui" --hidden-import quiron_web --collect-all webview ^
+  --collect-all pythonnet --collect-all clr_loader ^
   coach_app.py
 if errorlevel 1 goto erro
 

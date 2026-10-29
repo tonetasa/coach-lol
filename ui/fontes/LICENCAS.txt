@@ -1,0 +1,5 @@
+Fontes usadas na interface do Quíron (todas com licença livre SIL Open Font License 1.1):
+- Cinzel (The Cinzel Project Authors)
+- Rajdhani (Indian Type Foundry)
+- Inter (The Inter Project Authors)
+Arquivos obtidos do pacote @fontsource. Texto da licença: https://openfontlicense.org

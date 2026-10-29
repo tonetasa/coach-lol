@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Quíron</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="g-arco" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#bff0ff"/><stop offset=".5" stop-color="#4fc3f7"/><stop offset="1" stop-color="#1b6fa0"/></linearGradient>
+  </defs>
+  <symbol id="i-logo" viewBox="0 0 100 100" fill="none">
+    <path d="M22 10 C62 14 88 40 90 80" stroke="url(#g-arco)" stroke-width="7" stroke-linecap="round"/>
+    <path d="M22 10 L56 50 L90 80" stroke="#9fdcf5" stroke-width="1.6" opacity=".9"/>
+    <path d="M12 92 L74 26" stroke="#e8f8ff" stroke-width="3.2" stroke-linecap="round"/>
+    <path d="M74 26 L64 27 M74 26 L73 36" stroke="#e8f8ff" stroke-width="3.2" stroke-linecap="round"/>
+    <path d="M12 92 L16 80 M12 92 L24 88 M17 86 L21 75 M17 86 L28 83" stroke="#4fc3f7" stroke-width="2.4" stroke-linecap="round"/>
+    <path d="M30 20 L40 24 L34 30z M80 62 L78 72 L72 66z" fill="#4fc3f7" opacity=".85"/>
+  </symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></symbol>
+  <symbol id="i-som" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></symbol>
+  <symbol id="i-cliente" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M8.5 12l2.5 2.5 4.5-5" stroke-linecap="round"/></symbol>
+  <symbol id="i-bandeira" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></symbol>
+  <symbol id="i-controle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><path d="M7 7h10a5 5 0 0 1 4.8 6.3l-1 3.5a2.5 2.5 0 0 1-4.3 1L14.5 16h-5l-2 1.8a2.5 2.5 0 0 1-4.3-1l-1-3.5A5 5 0 0 1 7 7z"/><path d="M8 10v4M6 12h4"/><circle cx="16" cy="11" r=".8" fill="currentColor"/><circle cx="18" cy="13" r=".8" fill="currentColor"/></symbol>
+  <symbol id="i-app" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 8h18M8 21h8" stroke-linecap="round"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></symbol>
+  <symbol id="i-leao" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M24 5l6 5 8-1-1 8 6 6-6 6 1 8-8-1-6 5-6-5-8 1 1-8-6-6 6-6-1-8 8 1z" opacity=".55"/>
+    <path d="M17 20l3-3h8l3 3-1 7-3 4h-6l-3-4z"/><path d="M21 23h.01M27 23h.01M22 28h4"/></symbol>
+  <symbol id="i-parar" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+</svg>
+
+<div id="app">
+  <header class="cabeca">
+    <div class="logo"><svg><use href="#i-logo"/></svg></div>
+    <div class="marca">QUIRON</div>
+    <div class="versao" id="versao"></div>
+  </header>
+  <nav class="abas" id="abas">
+    <button class="aba ativa" data-tela="coach">COACH</button>
+    <button class="aba" data-tela="builds">BUILDS</button>
+    <button class="aba" data-tela="relatorio">RELATÓRIO</button>
+    <button class="aba" data-tela="config">CONFIGURAÇÕES</button>
+  </nav>
+  <div class="faixa oculto" id="faixa">
+    <span id="faixa-txt"></span>
+    <button class="bt sec" id="faixa-novidades">Novidades</button>
+    <button class="bt" id="faixa-atualizar">Atualizar agora</button>
+  </div>
+  <main>
+    <section class="tela ativa" id="tela-coach"></section>
+    <section class="tela" id="tela-builds"></section>
+    <section class="tela" id="tela-relatorio"></section>
+    <section class="tela" id="tela-config"></section>
+  </main>
+  <footer class="rodape" id="rodape"></footer>
+</div>
+<div id="modais"></div>
+<div id="toasts"></div>
+<script src="app.js"></script>
+</body>
+</html>

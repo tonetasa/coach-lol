@@ -41,7 +41,17 @@ jobs:
           --collect-submodules comtypes --collect-all vosk --collect-all sounddevice
           --collect-all customtkinter --hidden-import pystray._win32
           --hidden-import keyring.backends.Windows
+          --add-data "ui;ui" --hidden-import quiron_web --collect-all webview
+          --collect-all pythonnet --collect-all clr_loader
           coach_app.py
+
+      - name: Conferir a interface nova no executável
+        shell: pwsh
+        run: |
+          $saida = Join-Path $env:RUNNER_TEMP "interface.txt"
+          $p = Start-Process -FilePath "dist\Quiron.exe" -ArgumentList "--verificar-interface", "`"$saida`"" -Wait -PassThru
+          Get-Content $saida
+          if (-not (Get-Content $saida -Raw).StartsWith("OK")) { exit 1 }
 
       - name: Inno Setup
         shell: pwsh

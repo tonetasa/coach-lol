@@ -3,6 +3,7 @@ pyttsx3
 vosk
 sounddevice
 customtkinter
+pywebview
 pystray
 pillow
 keyring
