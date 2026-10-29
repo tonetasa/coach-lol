@@ -439,7 +439,7 @@ async function desenharConfig() {
     ${cartaoPerfil(perfil)}
     <div class="secao"><div class="secao-tit">${icone("som", 26)}<b>[</b>Voz<b>]</b></div>
       <div class="linha"><div class="rot">Falar os avisos<small>Pela voz do Windows.</small></div>${interruptor("voz_ligada", c.voz_ligada)}</div>
-      <div class="linha"><div class="rot">Voz do Quíron<small>Mais vozes: Configurações do Windows → Hora e idioma → Fala.</small></div>
+      <div class="linha"><div class="rot">Voz do Quíron<small>Mais vozes: Windows → Hora e idioma → Fala.</small></div>
         <select id="sel-voz">${S.vozes.map(v => `<option value="${esc(v.id)}" ${v.id === c.voz_windows ? "selected" : ""}>${esc(v.nome)}</option>`).join("")}</select>
         <button class="bt sec" id="bt-ouvir">${icone("play", 12)}Ouvir</button></div>
       <div class="linha"><div class="rot">Velocidade</div><div class="seg" id="seg-vel">${[150, 185, 220].map(v => `<button data-v="${v}" class="${v === velAtual ? "on" : ""}">${vel[v]}</button>`).join("")}</div></div>

@@ -302,3 +302,37 @@ svg.teia .val{font-size:12px;fill:var(--ouro)}
 #toasts{position:fixed;right:22px;bottom:44px;display:flex;flex-direction:column;gap:8px;z-index:60;max-width:420px}
 .toast{padding:10px 14px;border-radius:6px;background:#132330;border:1px solid #2f6d90;box-shadow:0 6px 20px rgba(0,0,0,.45),0 0 10px rgba(79,195,247,.2);font-size:13.5px;animation:entra .2s ease-out}
 @keyframes entra{from{opacity:0;transform:translateY(8px)}}
+
+/* ---------- janela menor (notebook, escala do Windows em 125%/150%) ---------- */
+#tela-coach .painel>.dentro{overflow-y:auto}
+.coach{min-height:560px}
+@media (max-height:820px){
+  .cabeca{padding-top:10px;gap:10px}
+  .logo svg{width:50px;height:50px}
+  .marca{font-size:38px}
+  .versao{font-size:17px;margin-bottom:3px}
+  .abas{margin-top:8px;gap:32px}
+  .aba{font-size:18px;padding:4px 0 6px}
+  main{margin-top:12px}
+  .rodape{padding:6px 0 8px}
+  .painel>.dentro{padding:16px 16px 12px 20px}
+  .coach{gap:12px;min-height:500px}
+  .status{padding:12px 18px;gap:18px}
+  .anel{width:130px;height:130px}
+  .anel .a2{inset:11px}.anel .a3{inset:20px}
+  .anel .rot b{font-size:19px}
+  .status .txt h3{font-size:25px}
+  .bt.grande{padding:10px 20px;font-size:22px}
+  .analise{padding:12px 16px}
+  .analise .corpo{grid-template-columns:290px 1fr 250px;gap:14px}
+  .analise svg.teia{width:290px;height:auto}
+  .tile b{font-size:25px}
+}
+@media (max-width:1100px){
+  .analise .corpo{grid-template-columns:270px 1fr}
+  .analise .dica{grid-column:1 / -1;border-left:0}
+  .analise svg.teia{width:270px;height:auto}
+  .coach .topo{grid-template-columns:1fr 290px}
+  .linha select{min-width:120px;max-width:175px}
+  .linha .rot{min-width:110px}
+}

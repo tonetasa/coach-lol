@@ -787,6 +787,12 @@ class Api:
 
     def _ao_fechar(self):
         """Evento da janela: True deixa fechar; False cancela (vai para a bandeja)."""
+        try:  # lembra o tamanho para a próxima vez
+            w, h = int(self._janela.width), int(self._janela.height)
+            if w >= 900 and h >= 560:
+                coach.salvar_config({"janela": [w, h]})
+        except Exception:  # noqa: BLE001
+            pass
         if self._bandeja and coach.CONFIG["minimizar_para_bandeja"]:
             threading.Thread(target=self._esconder, daemon=True).start()
             return False
@@ -851,10 +857,45 @@ def main(minimizado: bool = False):
     api.sair()
 
 
+def area_util() -> tuple[int, int, int, int] | None:
+    """Área livre da tela principal (sem a barra de tarefas), em pixels lógicos
+    (já descontada a escala do Windows, ex.: 125%). (x, y, largura, altura)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        ret = wintypes.RECT()
+        ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(ret), 0)  # SPI_GETWORKAREA
+        try:
+            dpi = ctypes.windll.user32.GetDpiForSystem()
+        except AttributeError:
+            dpi = 96
+        f = 96 / (dpi or 96)
+        return (round(ret.left * f), round(ret.top * f),
+                round((ret.right - ret.left) * f), round((ret.bottom - ret.top) * f))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def tamanho_janela() -> tuple[int, int, int | None, int | None]:
+    """Tamanho salvo da última vez (ou 1120x900), sem passar da área livre da tela."""
+    salvo = coach.CONFIG.get("janela") or [1120, 900]
+    w, h = int(salvo[0]), int(salvo[1])
+    area = area_util()
+    if not area:
+        return w, h, None, None
+    ax, ay, aw, ah = area
+    # a moldura da janela e a barra de título também ocupam espaço
+    w, h = min(w, aw - 16), min(h, ah - 40)
+    return max(w, 900), max(h, 560), ax + (aw - w) // 2, ay + max((ah - h) // 2 - 10, 0)
+
+
 def _abrir(webview, api: Api, minimizado: bool):
+    w, h, x, y = tamanho_janela()
     janela = webview.create_window(
         f"Quíron {VERSAO}", str(PASTA_UI / "index.html"), js_api=api,
-        width=1120, height=900, min_size=(980, 760), hidden=minimizado,
+        width=w, height=h, x=x, y=y, min_size=(900, 560), hidden=minimizado,
         background_color="#0b1118", text_select=False)
     api._ligar_janela(janela)
     janela.events.closing += api._ao_fechar
