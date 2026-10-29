@@ -516,6 +516,29 @@ class Api:
                 "funcao": b.get("funcao", "UTILITY"), "tipo": tipo or "mago",
                 "runa": b.get("runas", ""), "itens": [self._item(n) for n in b.get("itens", [])]}
 
+    def build_sugerida(self, cid: str, funcao: str | None = None) -> dict:
+        """Build padrão para um campeão novo, na função principal dele (ou na escolhida)."""
+        import builds_genericas
+        if cid not in self._campeoes:
+            return {"erro": "Campeão desconhecido."}
+        comuns = funcoes_comuns.funcoes_de(cid)
+        if not funcao:
+            no_pool = next((f for f in coach.FUNCOES if cid in coach.pool_da_funcao(f)), None)
+            provavel = builds_genericas.funcao_provavel(self._campeoes[cid])
+            pesquisada = coach.BUILDS.get(cid, {}).get("funcao")
+            funcao = (no_pool or pesquisada or (provavel if provavel in comuns else None)
+                      or (comuns[0] if comuns else provavel))
+        pesquisada = coach.BUILDS.get(cid)
+        if pesquisada and pesquisada.get("funcao") == funcao:
+            b, origem = pesquisada, "pesquisada"
+        else:  # sem build pesquisada nessa função: a padrão pelo tipo do campeão
+            g = builds_genericas.build_generica(cid, self._campeoes[cid], funcao)
+            b, origem = dict(g, tipo_ajuste=g["ajustes"]), "genérica"
+        return {"funcao": funcao, "tipo": b.get("tipo_ajuste") or "mago", "runa": b.get("runas", ""),
+                "itens": [self._item(n) for n in b.get("itens", [])], "origem": origem,
+                "comum": funcoes_comuns.comum(cid, funcao),
+                "comuns": [NOMES_FUNCAO[f] for f in comuns]}
+
     def build_salvar(self, cid: str, dados: dict) -> dict:
         if not cid or cid not in self._campeoes:
             return {"erro": "Escolha um campeão."}

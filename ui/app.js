@@ -624,6 +624,7 @@ async function editorBuild(cid) {
       <div><div class="rot-campo">Função</div><select id="ed-funcao" style="width:100%;max-width:none">${Object.entries(funcoes).map(([k, v]) => `<option value="${k}" ${k === d.funcao ? "selected" : ""}>${v}</option>`).join("")}</select></div>
       <div><div class="rot-campo">Estilo (ajustes contra o time inimigo)</div><select id="ed-tipo" style="width:100%;max-width:none">${Object.entries(tipos).map(([k, v]) => `<option value="${k}" ${k === d.tipo ? "selected" : ""}>${v}</option>`).join("")}</select></div>
     </div>
+    <div class="fraco" id="ed-origem" style="font-size:12.5px;margin-top:8px"></div>
     <div class="rot-campo">Runa principal</div><input class="campo" id="ed-runa" value="${esc(d.runa)}" style="width:100%">
     <div class="rot-campo">Itens, na ordem de compra (clique para trocar; arraste para mudar a ordem; ✕ tira)</div>
     <div class="slots" id="slots"></div>
@@ -633,10 +634,32 @@ async function editorBuild(cid) {
       : `<button class="bt" id="trocar-camp">Escolher campeão</button>`;
     const t = $("#trocar-camp", m.el);
     if (t) t.onclick = async () => {
-      const id = await seletorCampeao({funcao: $("#ed-funcao", m.el).value});
-      if (id) { campeao = id; nomeCamp = (await api.campeoes()).find(c => c.id === id)?.nome || id; desenharCamp(); }
+      const id = await seletorCampeao({});
+      if (id) {
+        campeao = id; nomeCamp = (await api.campeoes()).find(c => c.id === id)?.nome || id;
+        desenharCamp(); editado = false; await sugerir(null);
+      }
     };
   };
+  // Build padrão do campeão escolhido, na função principal dele (ou na função escolhida)
+  let editado = !!cid;
+  const sugerir = async funcao => {
+    if (!campeao) return;
+    const r = await api.build_sugerida(campeao, funcao);
+    if (r.erro) return;
+    $("#ed-funcao", m.el).value = r.funcao;
+    $("#ed-tipo", m.el).value = r.tipo;
+    $("#ed-runa", m.el).value = r.runa;
+    slots = [...r.itens, null, null, null, null, null, null].slice(0, 6);
+    desenharSlots();
+    const fn = $("#ed-funcao", m.el).selectedOptions[0].textContent;
+    $("#ed-origem", m.el).innerHTML = r.origem === "pesquisada"
+      ? `Build pesquisada de ${esc(nomeCamp)} (${esc(fn)}). Ajuste à vontade.`
+      : `Build padrão para ${esc(fn)}, pelo tipo do campeão. Ajuste à vontade.` +
+        (r.comum ? "" : ` <span class="ouro-t">${esc(nomeCamp)} é pouco jogado assim${r.comuns.length ? ` (costuma ir: ${esc(r.comuns.join(", "))})` : ""}.</span>`);
+  };
+  $("#ed-funcao", m.el).addEventListener("change", e => { if (!editado) sugerir(e.target.value); });
+  $("#ed-runa", m.el).addEventListener("input", () => { editado = true; });
   const desenharSlots = () => {
     $("#slots", m.el).innerHTML = slots.map((it, i) => `<div class="slot" data-i="${i}">
       ${it ? `<img class="ic-slot" draggable="true" src="${esc(url.item(it.id))}" title="${esc(it.nome)}" alt=""><span>${esc(it.nome)}</span><button class="tirar" title="Tirar">✕</button>`
@@ -648,9 +671,9 @@ async function editorBuild(cid) {
   area.addEventListener("click", async e => {
     const slot = e.target.closest(".slot"); if (!slot) return;
     const i = +slot.dataset.i;
-    if (e.target.closest(".tirar")) { slots[i] = null; slots = [...slots.filter(Boolean), null, null, null, null, null, null].slice(0, 6); return desenharSlots(); }
+    if (e.target.closest(".tirar")) { editado = true; slots[i] = null; slots = [...slots.filter(Boolean), null, null, null, null, null, null].slice(0, 6); return desenharSlots(); }
     if (e.target.closest(".ic-slot") || e.target.closest(".vazio-slot")) {
-      const it = await seletorItem(); if (it) { slots[i] = it; desenharSlots(); }
+      const it = await seletorItem(); if (it) { editado = true; slots[i] = it; desenharSlots(); }
     }
   });
   area.addEventListener("dragstart", e => { const s = e.target.closest(".slot"); arrastando = +s.dataset.i; e.dataTransfer.effectAllowed = "move"; });
@@ -661,7 +684,7 @@ async function editorBuild(cid) {
     const cheios = slots.filter(Boolean), item = slots[arrastando];
     cheios.splice(cheios.indexOf(item), 1);
     cheios.splice(Math.min(+s.dataset.i, cheios.length), 0, item);
-    slots = [...cheios, null, null, null, null, null, null].slice(0, 6); arrastando = null; desenharSlots();
+    slots = [...cheios, null, null, null, null, null, null].slice(0, 6); arrastando = null; editado = true; desenharSlots();
   });
   area.addEventListener("dragend", () => { arrastando = null; $$(".slot", area).forEach(x => x.classList.remove("alvo")); });
   $("#cancelar", m.el).onclick = m.fechar;
