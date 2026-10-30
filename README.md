@@ -17,7 +17,7 @@ Interface com quatro telas (Coach, Builds, Relatório e Configurações) no visu
 Na primeira vez, o Quíron pergunta seu Riot ID, elo, funções e campeões (pool). Tudo é ajustado a partir disso e pode ser mudado em *Configurações → Perfil*.
 
 - **Cliente do LoL:** aceita a fila sozinho e importa a página de runas e o conjunto de itens do campeão escolhido.
-- **Draft:** seu histórico na função, a melhor escolha do seu pool na sua vez (com os motivos) e, quando o draft fecha, os pontos positivos e de atenção do seu time.
+- **Draft:** seu histórico na função, na sua vez, a melhor escolha para o draft entre todos os campeões da função (força no patch pela tier list Esmeralda+, o que falta no seu time e a resposta ao time inimigo) e a melhor do seu pool, com os motivos e, quando o draft fecha, os pontos positivos e de atenção do seu time.
 - **Início da partida:** build, opções de itens contra a composição inimiga, plano de jogo (fase forte, iniciação, ameaças, sua rota) e, para o caçador, a rota inicial da selva.
 - **Durante a partida** (opcional): diferença de ouro dos times, ouro para o próximo item, CS/min, caçador inimigo visto em abates/objetivos, recompensas.
 - **Fim da partida:** resumo falado, alerta de sequência de derrotas e de jogo de madrugada.

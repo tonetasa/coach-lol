@@ -50,7 +50,7 @@ INTERRUPTORES = {
     "cliente": [
         ("aceitar_fila", "Aceitar a fila sozinho", "Aceita a partida assim que ela é encontrada.", False),
         ("ajuda_selecao", "Ajuda na seleção de campeões", "Seu histórico na função e notas sobre os inimigos.", False),
-        ("sugerir_escolha", "Sugerir escolha no draft", "Na sua vez: o campeão do seu pool que mais combina.", False),
+        ("sugerir_escolha", "Sugerir escolha no draft", "Na sua vez: o melhor campeão para o draft (força no patch + seu time + time inimigo) e o melhor do seu pool.", False),
         ("analise_draft", "Análise do draft no fim", "Pontos positivos e de atenção do seu time.", False),
         ("importar_runas", "Importar runas", "Cria a página “Quíron” do campeão escolhido.", False),
         ("importar_itens", "Importar itens", "Cria o conjunto de itens “Quíron” da loja.", False),

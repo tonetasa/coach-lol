@@ -246,6 +246,74 @@ def sugerir_escolha(pool: list[str], aliados: list[str], inimigos: list[str],
     return resultado
 
 
+# Campeões que derretem tanques (dano percentual / verdadeiro)
+CONTRA_TANQUES = {"Vayne", "KogMaw", "Gwen", "Fiora", "Cassiopeia", "Brand", "Kaisa",
+                  "Varus", "Lillia", "Trundle", "Mordekaiser", "Kayle", "Vladimir",
+                  "Malzahar", "Karthus", "Aphelios", "MasterYi", "Belveth", "Twitch",
+                  "Zeri", "Viktor", "Velkoz", "Darius", "Briar", "Chogath"}
+
+
+def sugerir_draft(candidatos: list[str], aliados: list[str], inimigos: list[str],
+                  indisponiveis: set, campeoes: dict, engaje: set, muito_cc: set,
+                  mergulho: set, nomes, funcao: str,
+                  tier_de) -> list[tuple[str, float, list[str]]]:
+    """Melhor escolha do draft entre TODOS os campeões comuns na função.
+
+    Nota = força no patch (tier list) + encaixe no seu time + resposta ao time
+    inimigo. Retorna [(campeão, nota, motivos)], do melhor para o pior.
+    """
+    from tiers import PONTOS
+    a = perfil_time(aliados, campeoes, engaje, muito_cc, mergulho)
+    i = perfil_time(inimigos, campeoes, engaje, muito_cc, mergulho)
+    resultado = []
+    for cid in candidatos:
+        if cid in indisponiveis or cid in aliados or cid in inimigos or cid not in campeoes:
+            continue
+        c = campeoes[cid]
+        tags = c.get("tags", [])
+        tracos = tracos_genericos(cid, campeoes, muito_cc)
+        t = tier_de(cid, funcao)
+        nota = PONTOS.get(t, 5)
+        motivos = []
+        info = c.get("info", {})
+        # suportes de proteção/engajamento quase não dão dano: não contam como "dano"
+        suporte_puro = "Support" in tags and max(info.get("magic", 0), info.get("attack", 0)) < 8
+        magico = "dano_magico" in tracos and not suporte_puro
+        fisico = "dano_magico" not in tracos and not suporte_puro
+        # o que falta no seu time
+        if a["n"] >= 2 and a["magico"] == 0 and magico:
+            nota += 6; motivos.append("seu time ainda não tem dano mágico")
+        if a["n"] >= 2 and a["fisico"] == 0 and fisico:
+            nota += 6; motivos.append("seu time ainda não tem dano físico")
+        if a["magico"] >= 3 and magico:
+            nota -= 5
+        if a["fisico"] >= 3 and fisico:
+            nota -= 5
+        if a["n"] >= 2 and a["tanques"] == 0 and "Tank" in tags:
+            nota += 5; motivos.append("dá linha de frente ao time")
+        if a["n"] >= 2 and a["iniciacao"] == 0 and ("controle" in tracos or cid in engaje):
+            nota += 4; motivos.append("traz controle de grupo")
+        # resposta ao time inimigo
+        if i["engaje"] and "anti_engaje" in tracos:
+            nota += 6
+            alvo = " e ".join(nomes(x) for x in inimigos if x in engaje)
+            motivos.append(f"anula o engajamento de {alvo}")
+        if i["mergulho"] >= 1 and ("anti_mergulho" in tracos or "protecao" in tracos):
+            nota += 5; motivos.append("segura quem mergulha")
+        if i["tanques"] >= 2 and cid in CONTRA_TANQUES:
+            nota += 5; motivos.append("bom contra os tanques inimigos")
+        poke_inimigo = sum(x in POKE for x in inimigos)
+        if poke_inimigo >= 2 and cid in engaje:
+            nota += 3; motivos.append("pune o time de poke com engajamento")
+        if i["n"] >= 3 and i["iniciacao"] == 0 and cid in POKE:
+            nota += 2; motivos.append("o inimigo tem pouco engajamento para punir o poke")
+        if t in ("S+", "S", "A"):
+            motivos.append(f"tier {t} no patch")
+        resultado.append((cid, round(nota, 1), motivos))
+    resultado.sort(key=lambda r: -r[1])
+    return resultado
+
+
 def analisar_draft(aliados: list[str], inimigos: list[str], campeoes: dict, engaje: set,
                    muito_cc: set, mergulho: set, nomes) -> tuple[list[str], list[str]]:
     """Pontos positivos e negativos do seu time em relação ao inimigo."""

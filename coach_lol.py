@@ -153,7 +153,7 @@ CONFIG = {
     "importar_runas": True,
     "importar_itens": True,
     "importar_feiticos": False,
-    "sugerir_escolha": True,     # na sua vez no draft: melhor campeão do seu pool
+    "sugerir_escolha": True,     # na sua vez: melhor campeão do draft (tier + times) e do seu pool
     "analise_draft": True,       # no fim do draft: pontos positivos e negativos
 
     # Início da partida: plano de jogo e, se você for o caçador, a rota inicial
@@ -295,6 +295,9 @@ def carregar_builds():
                 base[cid] = b
         info = {"patch": remoto.get("patch"), "fonte": "GitHub",
                 "atualizado": remoto.get("atualizado")}
+        if isinstance(remoto.get("tiers"), dict):
+            import tiers
+            tiers.atualizar(remoto["tiers"])
     usuario = _ler_json(ARQ_BUILDS_USUARIO)
     for cid, b in usuario.items():
         if _build_valida(b):
@@ -2133,25 +2136,48 @@ class SelecaoCampeoes:
         if not minha or minha.get("id") == self.vez_anunciada:
             return
         self.vez_anunciada = minha.get("id")
-        pool = pool_da_funcao(funcao)
-        if not pool:
-            return
         aliados, inimigos = self._times(sessao, eu)
         banidos = {self.por_chave.get(a.get("championId")) for a in acoes
                    if a.get("type") == "ban" and a.get("completed")}
+        # campeões já escolhidos ou em escolha por qualquer um (inclusive "hover")
+        banidos |= {self.por_chave.get(a.get("championId")) for a in acoes
+                    if a.get("type") == "pick" and a.get("championId")
+                    and a.get("actorCellId") != local}
         nomes = lambda c: self.nomes.get(c, c)  # noqa: E731
-        ranking = plano.sugerir_escolha(pool, aliados, inimigos, banidos, estatisticas_pool(),
+        frases = self.sugestoes_de_escolha(funcao, aliados, inimigos, banidos, nomes)
+        self.voz.falar("Sua vez de escolher. " + " ".join(frases))
+
+    def sugestoes_de_escolha(self, funcao: str, aliados: list, inimigos: list, banidos: set,
+                             nomes) -> list[str]:
+        """Melhor escolha do draft (todos os campeões da função) e a melhor do seu pool."""
+        import tiers
+        frases = []
+        candidatos = sorted(funcoes_comuns.COMUNS.get(funcao, set()) | set(tiers.TIERS.get(funcao, {})))
+        geral = plano.sugerir_draft(candidatos, aliados, inimigos, banidos, self.campeoes,
+                                    ENGAJE, MUITO_CC, MERGULHO, nomes, funcao, tiers.tier)
+        pool = pool_da_funcao(funcao)
+        do_pool = plano.sugerir_escolha(pool, aliados, inimigos, banidos, estatisticas_pool(),
                                         self.campeoes, ENGAJE, MUITO_CC, MERGULHO, nomes,
-                                        funcao)
-        if not ranking:
-            self.voz.falar("Sua vez de escolher. Nenhum campeão do seu pool está disponível.")
-            return
-        melhor, _, motivos = ranking[0]
-        frase = f"Sua vez de escolher. Melhor opção: {nomes(melhor)}"
-        frase += (": " + "; ".join(motivos[:2]) + ".") if motivos else "."
-        if len(ranking) > 1:
-            frase += f" Alternativa: {nomes(ranking[1][0])}."
-        self.voz.falar(frase)
+                                        funcao) if pool else []
+        if geral:
+            melhor, _, motivos = geral[0]
+            frase = f"Melhor pelo draft: {nomes(melhor)}"
+            frase += (": " + "; ".join(motivos[:2]) + ".") if motivos else "."
+            outros = [nomes(c) for c, _, _ in geral[1:3]]
+            if outros:
+                frase += " Também boas: " + " e ".join(outros) + "."
+            frases.append(frase)
+        if do_pool:
+            melhor_pool, _, motivos_pool = do_pool[0]
+            if not geral or melhor_pool != geral[0][0]:
+                frase = f"Do seu pool: {nomes(melhor_pool)}"
+                frase += (": " + "; ".join(motivos_pool[:2]) + ".") if motivos_pool else "."
+                frases.append(frase)
+            else:
+                frases.append(f"{nomes(melhor_pool)} também é do seu pool.")
+        elif pool:
+            frases.append("Nenhum campeão do seu pool está disponível.")
+        return frases or ["Não encontrei uma sugestão para esta função."]
 
     def checar_fim_do_draft(self, sessao: dict, eu: dict):
         if not CONFIG["analise_draft"] or self.draft_analisado:
