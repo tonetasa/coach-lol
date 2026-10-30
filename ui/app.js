@@ -537,7 +537,7 @@ async function testarChamada() {
   bt.disabled = true; est.innerHTML = `<span class="ciano-t">Fale agora: “${esc(nome)} itens”…</span>`;
   const r = await api.chamada_testar(nome);
   bt.disabled = false;
-  const nomes = {build: "itens", silencio: "silêncio", volta: "volta", anota: "anota", placar: "placar", farm: "farm", ameaca: "ameaça", rota: "rota", plano: "plano", repete: "repete", menos: "menos", mais_alto: "mais alto", mais_baixo: "mais baixo"};
+  const nomes = {itens_agora: "itens", build: "repete os itens", silencio: "silêncio", volta: "volta", anota: "anota", placar: "placar", farm: "farm", ameaca: "ameaça", rota: "rota", plano: "plano", repete: "repete", menos: "menos", mais_alto: "mais alto", mais_baixo: "mais baixo"};
   if (r.erro) est.innerHTML = `<span class="ruim">Não consegui usar o microfone (${esc(r.erro)}).</span>`;
   else if (r.acao) est.innerHTML = `<span class="ok">✓ Entendi “${esc(nomes[r.acao] || r.acao)}”. Funcionando!</span>`;
   else if (r.texto) est.innerHTML = `<span class="ouro-t">Ouvi “${esc(r.texto)}”, mas não reconheci o comando.</span>`;

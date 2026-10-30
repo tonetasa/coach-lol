@@ -1665,7 +1665,7 @@ class EditorChamada(ctk.CTkToplevel):
             self.after(200, self._esperar)
             return
         self.bt_teste.configure(state="normal")
-        nomes = {"build": "itens", "silencio": "silêncio", "volta": "volta", "anota": "anota"}
+        nomes = {"itens_agora": "itens", "build": "repete os itens", "silencio": "silêncio", "volta": "volta", "anota": "anota"}
         if acao and acao.startswith("erro"):
             self.teste.configure(text=f"Não consegui usar o microfone ({acao[6:]}).")
         elif acao:

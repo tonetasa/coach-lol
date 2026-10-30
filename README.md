@@ -23,7 +23,8 @@ Na primeira vez, o Quíron pergunta seu Riot ID, elo, funções e campeões (poo
 - **Fim da partida:** resumo falado, alerta de sequência de derrotas e de jogo de madrugada.
 - **Relatório:** evolução de participação em abates, mortes antes dos 14 min, por campeão e por horário.
 - **Comandos de voz** (offline), sempre com a palavra de chamada antes ("Quíron", trocável em Configurações → Voz):
-  - "itens": build e ajustes contra o time inimigo
+  - "itens": o que comprar agora (próximo item da build ou, se um inimigo estiver forte, o item de situação contra ele), pelo ouro que você tem
+  - "repete os itens": a build completa e os ajustes contra o time inimigo
   - "placar": abates, torres, dragões e diferença de ouro em itens
   - "farm": seu CS e CS por minuto, comparado à meta da função
   - "ameaça": o inimigo mais forte agora (abates, nível, ouro em itens)

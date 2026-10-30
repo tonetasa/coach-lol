@@ -176,7 +176,8 @@ CONFIG = {
 
     # Comandos de voz (reconhecimento offline com Vosk). Diga a palavra de
     # chamada + comando, por exemplo "Quíron itens":
-    #   itens    -> repete a build e os ajustes contra o time inimigo
+    #   itens    -> o que comprar agora (pelo ouro, inventário e inimigo mais forte)
+    #   repete os itens -> a build completa e os ajustes contra o time inimigo
     #   silêncio -> para de falar por alguns minutos
     #   volta    -> volta a falar
     #   anota    -> marca o momento para revisar no resumo da partida
@@ -351,7 +352,7 @@ def exportar_builds_padrao() -> dict:
 URL_MODELO_VOZ = "https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip"
 PASTA_MODELO_VOZ = BASE / "modelo_voz"
 COMANDOS = {
-    "itens": "build", "repete os itens": "build",
+    "itens": "itens_agora", "repete os itens": "build",
     "silêncio": "silencio", "cala a boca": "silencio",
     "volta": "volta", "pode falar": "volta",
     "anota": "anota", "marca": "anota",
@@ -1153,6 +1154,22 @@ class Itens:
         return max(self.preco(item_id) - valor_possuido(item_id), 0)
 
 
+def melhor_componente(itens: "Itens", item_id: str, inventario: list, ouro: float) -> str | None:
+    """Parte mais cara do item que dá para comprar agora (considera o que já tem)."""
+    possuidos = {str(i) for i in inventario}
+    candidatos, pilha = set(), list(itens.dados.get(item_id, {}).get("de", []))
+    while pilha:
+        c = pilha.pop()
+        if c in candidatos:
+            continue
+        candidatos.add(c)
+        pilha.extend(itens.dados.get(c, {}).get("de", []))
+    viaveis = [(itens.custo_restante(c, inventario), c) for c in candidatos
+               if c not in possuidos and itens.preco(c) > 0]
+    viaveis = [(custo, c) for custo, c in viaveis if 0 < custo <= ouro]
+    return max(viaveis)[1] if viaveis else None
+
+
 def id_campeao(jogador: dict, campeoes: dict) -> str:
     """Converte o jogador da API ao vivo no id do Data Dragon (ex.: Wukong -> MonkeyKing)."""
     raw = jogador.get("rawChampionName", "")
@@ -1695,10 +1712,80 @@ class Coach:
         frase.append(f"Ele está {sr['kills']}, {sr['deaths']}, {sr['assists']}.")
         return " ".join(frase)
 
+    # -- "Quíron itens": o que comprar agora ---------------------------------
+    def texto_itens_agora(self) -> str:
+        jogo = self.ultimo_jogo or {}
+        if not self.em_partida or not self.eu or not jogo:
+            return self.texto_build or "Não tenho build cadastrada para esse campeão."
+        if not self.build or not self.itens:
+            return "Não tenho build cadastrada para esse campeão."
+        ouro = jogo.get("activePlayer", {}).get("currentGold", 0)
+        inventario = [i.get("itemID") for i in self.eu.get("items", [])]
+        possuidos = {str(i) for i in inventario}
+        build_ids = [(n, self.itens.id(n)) for n in self.build["itens"]]
+        feitos = sum(1 for _, iid in build_ids if iid in possuidos)
+        proximo = next(((n, iid) for n, iid in build_ids if iid and iid not in possuidos), None)
+
+        # inimigo mais forte agora e contra o que ele pede item
+        _, deles = self._times()
+        motivo, alvo = None, None
+        if deles:
+            top = max(deles, key=self._forca)
+            s = top.get("scores", {})
+            forte = s.get("kills", 0) >= 4 or s.get("kills", 0) - s.get("deaths", 0) >= 3
+            cid = id_campeao(top, self.campeoes)
+            c = self.campeoes.get(cid, {})
+            tags, info = c.get("tags", []), c.get("info", {})
+            if forte and feitos >= 1:
+                chaves = []
+                if cid in CURA_FORTE:
+                    chaves.append("cura")
+                if tags[:1] == ["Assassin"]:
+                    chaves.append("assassinos")
+                chaves.append("ap" if info.get("magic", 0) > info.get("attack", 0) else "ad")
+                for k in chaves:
+                    desc, opcoes = self.build["ajustes"].get(k, ("", []))
+                    for n in opcoes:
+                        iid = self.itens.id(n)
+                        if iid and iid not in possuidos:
+                            alvo = (n, iid)
+                            motivo = (f"{top['championName']} está forte, com {s.get('kills', 0)} "
+                                      f"abates. Contra {desc}")
+                            break
+                    if alvo:
+                        break
+        if not alvo:
+            alvo = proximo
+        if not alvo:
+            return "Sua build está completa. Se sobrar ouro, troque as botas ou compre elixires."
+        nome, iid = alvo
+        nome_pt = self.itens.nome_pt(nome)
+        custo = self.itens.custo_restante(iid, inventario)
+        frases = [f"{motivo}: {nome_pt}." if motivo else f"Próximo item: {nome_pt}."]
+        if ouro >= custo:
+            frases.append(f"Dá para comprar {nome_pt} agora.")
+            sobra = ouro - custo
+        else:
+            comp = melhor_componente(self.itens, iid, inventario, ouro)
+            if comp:
+                c_custo = self.itens.custo_restante(comp, inventario)
+                frases.append(f"Com {int(ouro)} de ouro, compre {self.itens.dados[comp]['nome']} agora. "
+                              f"Faltam {int(round(custo - c_custo, -1))} para completar.")
+                sobra = ouro - c_custo
+            else:
+                frases.append(f"Faltam {int(round(custo - ouro, -1))} de ouro para {nome_pt}.")
+                sobra = ouro
+        tem_controle = any(i.get("itemID") == ID_SENTINELA_CONTROLE for i in self.eu.get("items", []))
+        if not tem_controle and sobra >= self.itens.preco(ID_SENTINELA_CONTROLE) > 0:
+            frases.append("Sobra para uma sentinela de controle.")
+        return " ".join(frases)
+
     # -- comandos de voz ---------------------------------------------------
     def executar_comando(self, cmd: str):
         t = (self.ultimo_jogo or {}).get("gameData", {}).get("gameTime")
-        if cmd == "build":
+        if cmd == "itens_agora":
+            self.voz.falar(self.texto_itens_agora(), t, forcar=True, guardar=False)
+        elif cmd == "build":
             self.voz.falar(self.texto_build or "Não tenho build cadastrada para esse campeão.",
                            t, forcar=True, guardar=False)
         elif cmd == "silencio":
