@@ -34,6 +34,7 @@ Na primeira vez, o Quíron pergunta seu Riot ID, elo, funções e campeões (poo
   - "menos": só os avisos importantes ("volta" traz todos de novo)
   - "mais alto" / "mais baixo": volume da voz
   - "silêncio", "volta", "anota"
+- **Construtor de pool** (aba Builds ou Relatório): lê as suas últimas 100 partidas pelo cliente (ou as registradas pelo Quíron) e, em cada função, separa os campeões em manter, em teste e rever, sugere quem testar (forte no patch e no mesmo estilo dos seus melhores) e monta um pool que dá para aplicar no perfil com um clique.
 - **Objetivos neutros**: avisa 1 minuto antes de dragão, vastilarvas, arauto e barão nascerem, pelos tempos padrão e pelos abates anunciados no jogo.
 - **Voz à escolha**: qualquer voz do Windows instalada, em três velocidades.
 - **Perfil pelo cliente**: busca o Riot ID, preenche o elo e sugere funções e campeões pelas últimas partidas.

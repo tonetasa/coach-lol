@@ -304,6 +304,7 @@ function desenharBuilds() {
   $("#tela-builds").innerHTML = `
     <div class="builds-cab"><div class="info">Patch ${esc(info.patch)} <small>· ${esc(info.fonte)}${info.atualizado ? ", " + esc(info.atualizado) : ""}</small></div>
       <button class="bt" id="bt-nova">+ Campeão</button>
+      <button class="bt sec" id="bt-construtor">Construtor de pool</button>
       <button class="bt sec" id="bt-buscar-builds">Buscar atualização</button>
       <button class="bt sec" id="bt-doc">Documento</button></div>
     <div class="builds">
@@ -311,6 +312,7 @@ function desenharBuilds() {
       ${painel("Desempenho", "do campeão selecionado", `<div class="rolagem desemp" id="desemp"></div>`)}
     </div>`;
   $("#bt-nova").onclick = () => editorBuild(null);
+  $("#bt-construtor").onclick = modalConstrutor;
   $("#bt-buscar-builds").onclick = () => { api.buscar_builds(); toast("Buscando builds…"); };
   $("#bt-doc").onclick = () => api.abrir_url("builds");
   $(".lista-builds").onclick = async e => {
@@ -380,7 +382,9 @@ function desenharRelatorio() {
         <div class="tile"><small>Vitória</small><b>${r.taxa == null ? "—" : r.taxa + "%"}</b><span>das partidas</span></div>
         <div class="tile"><small>Part. em abates</small><b>${r.kp == null ? "—" : num(r.kp) + "%"}</b><span>meta 50%</span></div>
         <div class="tile"><small>Mortes &lt; 14</small><b>${num(r.mortes14, 1)}</b><span>por partida</span></div></div>
-      <button class="bt grande" style="width:100%;margin-top:14px;font-size:21px;padding:10px" id="bt-exportar">Exportar relatório detalhado</button>
+      <div style="display:flex;gap:10px;margin-top:14px">
+        <button class="bt grande" style="flex:1;font-size:20px;padding:10px" id="bt-exportar">Exportar relatório detalhado</button>
+        <button class="bt sec" style="height:auto" id="bt-construtor-rel">Construtor<br>de pool</button></div>
       <div class="cartao" style="margin-top:14px;padding:8px 10px">
         <table class="tabela"><tr><th>Top campeões</th><th>Partidas</th><th>V–D</th><th>Part.</th><th>Mortes</th></tr>
         ${d.campeoes.length ? d.campeoes.map(c => `<tr><td>${c.id ? img(url.camp(c.id), "", 26) : ""}${esc(c.campeao)}</td><td>${c.partidas}</td>
@@ -402,6 +406,7 @@ function desenharRelatorio() {
     ${painel("Histórico", "Como você vem jogando", dir)}</div>`;
   $("#periodo").onclick = e => { const b = e.target.closest("button"); if (b) { S.dias = +b.dataset.d; carregarRelatorio(); } };
   $("#bt-exportar").onclick = () => api.exportar_relatorio(S.dias);
+  $("#bt-construtor-rel").onclick = modalConstrutor;
 }
 
 // ---------------------------------------------------------------------------
@@ -693,6 +698,46 @@ async function editorBuild(cid) {
       runa: $("#ed-runa", m.el).value, itens: slots.filter(Boolean).map(x => x.en)});
     if (r.erro) { $("#ed-erro", m.el).textContent = r.erro; return; }
     m.fechar(); S.buildSel = campeao; carregarBuilds();
+  };
+}
+
+// Construtor de pool: o que manter, rever e testar em cada função
+async function modalConstrutor() {
+  const m = abrirModal(`<h2>Construtor de pool</h2><div class="sub" id="cp-fonte">Lendo as suas últimas partidas…</div>
+    <div class="rolagem" id="cp-corpo"><p class="vazio" style="margin-top:20px">Isso leva alguns segundos.</p></div>
+    <div class="rodape-modal"><button class="bt sec" id="cancelar">Fechar</button></div>`);
+  $("#cancelar", m.el).onclick = m.fechar;
+  const r = await api.construtor_pool();
+  if (r.erro) { $("#cp-fonte", m.el).textContent = r.erro; $("#cp-corpo", m.el).innerHTML = ""; return; }
+  $("#cp-fonte", m.el).textContent = `Base: ${r.fonte}. Força no patch: tier list ${r.patch} (Esmeralda+).`;
+  const linha = (c, cor) => `<div style="display:flex;align-items:center;gap:10px;padding:5px 0">
+      ${img(url.camp(c.id), "ic camp", 36)}
+      <div style="flex:1;min-width:0"><b style="font-family:var(--titulo);font-size:16px">${esc(c.nome)}</b>
+        ${c.tier ? `<span class="tag ${c.tier.startsWith("S") ? "ouro" : "cinza"}" style="margin-left:4px">${esc(c.tier)}</span>` : ""}
+        <div style="font-size:12px;color:var(--texto2)">${esc(c.motivo)}${c.kda != null ? ` · KDA ${num(c.kda, 1)}` : ""}</div></div>
+      ${c.partidas != null ? `<b class="${cor}" style="font-family:var(--titulo);font-size:17px">${c.taxa}%</b>` : ""}</div>`;
+  const grupo = (tit, itens, cor) => itens.length ? `<div class="rot-campo" style="color:var(--${cor === "ok" ? "verde" : cor === "ruim" ? "vermelho" : cor === "ouro-t" ? "ouro" : "texto2"})">${tit}</div>${itens.map(c => linha(c, cor)).join("")}` : "";
+  $("#cp-corpo", m.el).innerHTML = r.funcoes.map(f => {
+    const cs = f.campeoes, atual = r.pool_atual[f.funcao] || [];
+    return `<div class="cartao pool" data-f="${f.funcao}" style="margin-top:14px">
+      <h5>${esc(f.nome)} <small>${f.partidas} ${f.partidas === 1 ? "partida" : "partidas"}</small></h5>
+      ${grupo("Manter", cs.filter(c => c.categoria === "manter"), "ok")}
+      ${grupo("Em teste", cs.filter(c => c.categoria === "teste").slice(0, 4), "fraco")}
+      ${grupo("Rever", cs.filter(c => c.categoria === "rever"), "ruim")}
+      ${grupo("Para testar", f.testar, "ouro-t")}
+      <div class="rot-campo">Pool sugerido</div>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        ${f.sugerido.map(id => img(url.camp(id), "ic camp", 40)).join("")}
+        <button class="bt pequeno" data-usar="${f.funcao}" style="margin-left:auto">Usar no meu perfil</button></div>
+      ${atual.length ? `<div class="fraco" style="font-size:12px;margin-top:6px">Seu pool hoje: ${atual.map(id => esc((cs.find(c => c.id === id) || {}).nome || id)).join(", ")}</div>` : ""}
+    </div>`;
+  }).join("") || `<p class="vazio" style="margin-top:14px">Nenhuma função com partidas suficientes.</p>`;
+  $("#cp-corpo", m.el).onclick = async e => {
+    const b = e.target.closest("[data-usar]"); if (!b) return;
+    const f = r.funcoes.find(x => x.funcao === b.dataset.usar);
+    await api.usar_pool(f.funcao, f.sugerido);
+    b.textContent = "✓ Pool atualizado"; b.disabled = true;
+    if (S.tela === "builds") carregarBuilds();
   };
 }
 

@@ -195,6 +195,48 @@ class ClienteLoL:
             campeoes.setdefault(funcao, Counter())[p.get("championId")] += 1
         return {"funcoes": funcoes, "campeoes": campeoes, "partidas_lidas": sum(funcoes.values())}
 
+    def historico_partidas(self, puuid: str, total: int = 100) -> list[dict]:
+        """Últimas partidas de Summoner's Rift: função, campeão (key), vitória e KDA.
+
+        O cliente entrega o histórico em páginas; pede de 20 em 20 até `total`.
+        """
+        saida: list[dict] = []
+        vistos = set()
+        for inicio in range(0, total, 20):
+            h = self.get(f"/lol-match-history/v1/products/lol/{puuid}/matches"
+                         f"?begIndex={inicio}&endIndex={inicio + 19}") or {}
+            jogos = (h.get("games") or {}).get("games") or []
+            if not jogos:
+                break
+            novos = 0
+            for jogo in jogos:
+                gid = jogo.get("gameId")
+                if gid in vistos:
+                    continue
+                vistos.add(gid)
+                novos += 1
+                if jogo.get("mapId") not in (None, 11) or jogo.get("queueId") in FILAS_IGNORADAS:
+                    continue
+                partes = jogo.get("participants") or []
+                if not partes:
+                    continue
+                p = partes[0]
+                for ident in jogo.get("participantIdentities") or []:
+                    if (ident.get("player") or {}).get("puuid") == puuid:
+                        pid = ident.get("participantId")
+                        p = next((x for x in partes if x.get("participantId") == pid), p)
+                funcao = _funcao(p)
+                if not funcao:
+                    continue
+                st = p.get("stats") or {}
+                saida.append({"funcao": funcao, "campeao": str(p.get("championId")),
+                              "vitoria": bool(st.get("win")), "k": st.get("kills", 0),
+                              "d": st.get("deaths", 0), "a": st.get("assists", 0),
+                              "fila": jogo.get("queueId")})
+            if not novos:
+                break  # cliente devolveu a mesma página: acabou o histórico
+        return saida[:total]
+
     # -- fila ----------------------------------------------------------------
     def aceitar_fila(self) -> bool:
         """Aceita a partida encontrada. Retorna True se aceitou agora."""

@@ -364,3 +364,89 @@ def analisar_draft(aliados: list[str], inimigos: list[str], campeoes: dict, enga
     if not ruins:
         ruins.append("Nenhuma fraqueza clara na composição.")
     return bons, ruins
+
+
+# ---------------------------------------------------------------------------
+# Construtor de pool: o que manter, rever e testar, a partir do seu histórico
+# ---------------------------------------------------------------------------
+BONUS_TIER = {"S+": 6, "S": 4, "A": 2, "B": 0, "C": -2, "D": -4}
+
+
+def construir_pool(partidas: list[dict], funcoes: list[str], campeoes: dict, tier_de,
+                   comuns: dict, nomes) -> list[dict]:
+    """partidas: [{funcao, campeao (id do Data Dragon), vitoria, k, d, a}].
+
+    Para cada função: campeões jogados com nota (vitórias suavizadas + força no
+    patch + volume), categoria (manter / rever / em teste) e sugestões para
+    testar (fortes no patch e parecidos com os seus melhores).
+    """
+    resultado = []
+    total = len(partidas)
+    contagem = {}
+    for p in partidas:
+        contagem[p["funcao"]] = contagem.get(p["funcao"], 0) + 1
+    # funções do perfil + as que você joga bastante (15% ou mais)
+    usar = list(dict.fromkeys(list(funcoes) + [f for f, n in sorted(contagem.items(), key=lambda x: -x[1])
+                                               if total and n / total >= 0.15]))
+    for funcao in usar:
+        jogos = [p for p in partidas if p["funcao"] == funcao]
+        por_camp: dict[str, list] = {}
+        for p in jogos:
+            por_camp.setdefault(p["campeao"], []).append(p)
+        lista = []
+        for cid, js in por_camp.items():
+            if cid not in campeoes:
+                continue
+            n = len(js)
+            v = sum(j["vitoria"] for j in js)
+            k, d, a = (sum(j[x] for j in js) for x in ("k", "d", "a"))
+            kda = (k + a) / max(d, 1)
+            t = tier_de(cid, funcao)
+            nota = (v + 2) / (n + 4) * 100 + BONUS_TIER.get(t, -1) + min(n, 10) * 0.5
+            taxa = round(100 * v / n)
+            if n >= 5 and taxa >= 52:
+                cat, motivo = "manter", f"{taxa}% em {n} partidas"
+            elif n >= 3 and taxa >= 60:
+                cat, motivo = "manter", f"{taxa}% em {n} partidas (poucas, mas boas)"
+            elif n >= 5 and taxa < 45:
+                cat, motivo = "rever", f"só {taxa}% em {n} partidas"
+                if t in ("C", "D"):
+                    motivo += f" e tier {t} no patch"
+            else:
+                cat, motivo = "teste", f"{taxa}% em {n} {'partida' if n == 1 else 'partidas'}: jogue mais para saber"
+            if cid not in comuns.get(funcao, set()):
+                motivo += "; pouco jogado nesta função"
+                nota -= 3
+            lista.append({"id": cid, "nome": nomes(cid), "partidas": n, "vitorias": v, "taxa": taxa,
+                          "kda": round(kda, 1), "tier": t, "categoria": cat, "motivo": motivo,
+                          "nota": round(nota, 1)})
+        lista.sort(key=lambda x: -x["nota"])
+
+        # testar: fortes no patch, do mesmo estilo dos seus melhores, que você não joga
+        bons = [x for x in lista if x["categoria"] == "manter"] or lista[:2]
+        estilos = {campeoes[x["id"]]["tags"][0] for x in bons if campeoes[x["id"]].get("tags")}
+        jogados = set(por_camp)
+        testar = []
+        for cid in comuns.get(funcao, set()):
+            t = tier_de(cid, funcao)
+            if cid in jogados or t not in ("S+", "S", "A") or cid not in campeoes:
+                continue
+            tag = (campeoes[cid].get("tags") or [""])[0]
+            parecido = tag in estilos
+            nota = {"S+": 3, "S": 2, "A": 1}[t] + (3 if parecido else 0)
+            motivo = f"tier {t} no patch" + (f", mesmo estilo de {', '.join(nomes(x['id']) for x in bons if (campeoes[x['id']].get('tags') or [''])[0] == tag)[:60]}" if parecido and bons else "")
+            testar.append({"id": cid, "nome": nomes(cid), "tier": t, "motivo": motivo, "nota": nota})
+        testar.sort(key=lambda x: (-x["nota"], x["nome"]))
+        testar = testar[:4]
+
+        # pool sugerido: até 3 que você já joga bem + completa com quem testar (máx. 4)
+        sugerido = [x["id"] for x in lista if x["categoria"] == "manter"][:3]
+        if len(sugerido) < 3:
+            sugerido += [x["id"] for x in lista if x["categoria"] == "teste" and x["id"] not in sugerido][:3 - len(sugerido)]
+        for x in testar:
+            if len(sugerido) >= 4:
+                break
+            sugerido.append(x["id"])
+        resultado.append({"funcao": funcao, "partidas": len(jogos), "campeoes": lista,
+                          "testar": testar, "sugerido": sugerido})
+    return resultado

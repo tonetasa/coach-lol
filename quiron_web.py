@@ -430,6 +430,55 @@ class Api:
             registro.erro("Falha ao buscar invocador", e)
             return {"erro": "Não consegui buscar agora. Tente de novo."}
 
+    # ---- construtor de pool -----------------------------------------------------
+    def construtor_pool(self) -> dict:
+        """Analisa as últimas partidas e sugere o pool de cada função."""
+        import plano
+        import tiers
+        partidas, fonte = [], ""
+        try:
+            cliente = coach.ClienteLoL(coach.CONFIG["pasta_lol"])
+            eu = cliente.eu()
+            if eu and eu.get("puuid"):
+                por_chave = {str(c["key"]): k for k, c in self._campeoes.items()}
+                for p in cliente.historico_partidas(eu["puuid"], 100):
+                    if p["campeao"] in por_chave:
+                        partidas.append(dict(p, campeao=por_chave[p["campeao"]]))
+                fonte = f"últimas {len(partidas)} partidas de {eu['riot_id']} (pelo cliente do LoL)"
+        except Exception as e:  # noqa: BLE001
+            registro.erro("Falha ao ler o histórico pelo cliente", e)
+        if not partidas:  # cliente fechado: usa as partidas registradas pelo Quíron
+            for r in relatorio.ler_partidas(0):
+                try:
+                    k, d, a = (int(x) for x in r.get("kda", "0/0/0").split("/"))
+                except ValueError:
+                    k = d = a = 0
+                if r.get("posicao") and r.get("campeao_id") and r.get("resultado") in ("vitória", "derrota"):
+                    partidas.append({"funcao": r["posicao"], "campeao": r["campeao_id"],
+                                     "vitoria": r["resultado"] == "vitória", "k": k, "d": d, "a": a})
+            fonte = (f"{len(partidas)} partidas registradas pelo Quíron (abra o cliente do LoL "
+                     "para usar o histórico completo)")
+        if not partidas:
+            return {"erro": "Não encontrei partidas. Abra o cliente do LoL (logado) e tente de novo."}
+        nomes = lambda c: self._campeoes.get(c, {}).get("name", c)  # noqa: E731
+        funcoes = plano.construir_pool(partidas, coach.perfil()["funcoes"], self._campeoes,
+                                       tiers.tier, funcoes_comuns.COMUNS, nomes)
+        for f in funcoes:
+            f["nome"] = NOMES_FUNCAO.get(f["funcao"], f["funcao"])
+        return {"fonte": fonte, "total": len(partidas), "funcoes": funcoes,
+                "pool_atual": coach.perfil()["pool"], "patch": tiers.PATCH}
+
+    def usar_pool(self, funcao: str, campeoes: list[str]) -> dict:
+        p = coach.CONFIG.get("perfil") or {}
+        funcoes = list(dict.fromkeys(list(p.get("funcoes", [])) + [funcao]))
+        funcoes = [f for f in coach.FUNCOES if f in funcoes]
+        pool = dict(p.get("pool", {}))
+        pool[funcao] = [c for c in campeoes if c in self._campeoes][:6]
+        coach.salvar_config({"perfil": dict(p, funcoes=funcoes, pool=pool)})
+        self._precisa_perfil = False
+        self.escrever(f"Pool de {NOMES_FUNCAO.get(funcao, funcao)} atualizado.")
+        return {"ok": True, "perfil": self.perfil()}
+
     # ---- campeões e itens -----------------------------------------------------
     def campeoes(self, funcao: str | None = None) -> list[dict]:
         lista = []
