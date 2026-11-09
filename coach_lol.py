@@ -102,7 +102,6 @@ CONFIG = {
 
     # Sentinela de controle: lembra se você estiver sem uma no inventário
     "lembrar_sentinela_controle": True,
-    "intervalo_aviso_sentinela_s": 180,
 
     # Lembretes por tempo de jogo (minuto -> frase). Confira os tempos do
     # patch atual e edite aqui; são só lembretes de relógio, como olhar o
@@ -1317,6 +1316,9 @@ class Coach:
         self.ultimo_aviso: dict[str, float] = {}
         self.lembretes_feitos: set[str] = set()
         self.nivel_anterior = 0
+        self.itens_vistos: set | None = None
+        self.ouro_visto: float | None = None
+        self.estava_morto = False
         self.mortes: list[dict] = []
         self.historico_kp: list[tuple[float, float]] = []
         self.ultimo_jogo: dict | None = None
@@ -1849,7 +1851,7 @@ class Coach:
         self.checar_eventos(jogo, t)
         self.checar_ouro(ativo, t)
         self.checar_kp(jogo, t)
-        self.checar_sentinela(t)
+        self.checar_sentinela(ativo, t)
         self.checar_lembretes_tempo(t)
         self.checar_nivel(ativo, t)
         self.checar_recompensa(jogo, t)
@@ -1906,12 +1908,27 @@ class Coach:
             self.voz.falar(
                 f"Sua participação em abates está em {round(kp * 100)} por cento.", t, extra=True)
 
-    def checar_sentinela(self, t: float):
-        if not CONFIG["lembrar_sentinela_controle"] or t < 3 * 60:
+    def checar_sentinela(self, ativo: dict, t: float):
+        """Lembra da sentinela de controle só quando você está na base:
+        logo depois de comprar algo (voltou para a base) ou ao morrer (vai renascer lá)."""
+        itens = {i.get("itemID") for i in self.eu.get("items", [])}
+        anteriores, self.itens_vistos = self.itens_vistos, itens
+        ouro = ativo.get("currentGold", 0)
+        ouro_antes, self.ouro_visto = self.ouro_visto, ouro
+        morto = bool(self.eu.get("isDead"))
+        morreu_agora, self.estava_morto = morto and not self.estava_morto, morto
+        if not CONFIG["lembrar_sentinela_controle"] or t < 3 * 60 or anteriores is None:
             return
-        tem = any(i.get("itemID") == ID_SENTINELA_CONTROLE for i in self.eu.get("items", []))
-        if not tem and self.pode_avisar("sentinela", CONFIG["intervalo_aviso_sentinela_s"], t):
-            self.voz.falar("Você está sem sentinela de controle.", t, extra=True)
+        # item novo E ouro caindo = compra na loja (itens que evoluem sozinhos não gastam ouro)
+        comprou = bool(itens - anteriores) and ouro_antes is not None and ouro_antes - ouro >= 100
+        if not (comprou or morreu_agora) or ID_SENTINELA_CONTROLE in itens:
+            return
+        if ouro < 75:
+            return  # sem ouro para ela agora
+        if self.pode_avisar("sentinela", 90, t):
+            frase = ("Quando renascer, compre uma sentinela de controle." if morreu_agora
+                     else "Aproveite que está na base: compre uma sentinela de controle.")
+            self.voz.falar(frase, t, extra=True)
 
     def checar_lembretes_tempo(self, t: float):
         for mmss, frase in CONFIG["lembretes_tempo"].items():
